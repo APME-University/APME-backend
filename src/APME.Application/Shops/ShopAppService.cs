@@ -9,6 +9,8 @@ using Volo.Abp.Domain.Repositories;
 using Volo.Abp.TenantManagement;
 using Volo.Abp.Uow;
 using Volo.Abp.MultiTenancy;
+using System.Collections.Generic;
+using Volo.Abp.Data;
 
 namespace APME.Shops;
 
@@ -18,18 +20,20 @@ public class ShopAppService : CrudAppService<Shop, ShopDto, Guid, GetShopListInp
     private readonly IUnitOfWorkManager _unitOfWorkManager;
     private readonly ITenantRepository _tenantRepository;
     private readonly ICurrentTenant _currentTenant;
-
+    private readonly IDataFilter _dataFilter;
     public ShopAppService(
         IRepository<Shop, Guid> repository,
         ITenantAppService tenantAppService,
         IUnitOfWorkManager unitOfWorkManager,
         ITenantRepository tenantRepository,
-        ICurrentTenant currentTenant) : base(repository)
+        ICurrentTenant currentTenant,
+        IDataFilter dataFilter) : base(repository)
     {
         _tenantAppService = tenantAppService;
         _unitOfWorkManager = unitOfWorkManager;
         _tenantRepository = tenantRepository;
         _currentTenant = currentTenant;
+        _dataFilter = dataFilter;
     }
 
     public override async Task<ShopDto> CreateAsync(CreateUpdateShopDto input)
@@ -153,25 +157,39 @@ public class ShopAppService : CrudAppService<Shop, ShopDto, Guid, GetShopListInp
 
     public override async Task<PagedResultDto<ShopDto>> GetListAsync(GetShopListInput input)
     {
-        var result = await base.GetListAsync(input);
-        
-        // Include tenant names for all shops
-        if (result.Items != null && result.Items.Any())
+        using (_dataFilter.Disable<IMultiTenant>())
         {
-            var tenantIds = result.Items.Where(x => x.TenantId.HasValue).Select(x => x.TenantId.Value).Distinct().ToList();
-            var tenants = await _tenantRepository.GetListAsync();
-            var tenantDict = tenants.Where(t => tenantIds.Contains(t.Id)).ToDictionary(t => t.Id, t => t.Name);
-
-            foreach (var shopDto in result.Items)
+            await CheckGetListPolicyAsync().ConfigureAwait(continueOnCapturedContext: false);
+            IQueryable<Shop> query = await CreateFilteredQueryAsync(input).ConfigureAwait(continueOnCapturedContext: false);
+            int totalCount = await base.AsyncExecuter.CountAsync(query).ConfigureAwait(continueOnCapturedContext: false);
+            new List<Shop>();
+            List<ShopDto> items = new List<ShopDto>();
+            if (totalCount > 0)
             {
-                if (shopDto.TenantId.HasValue && tenantDict.TryGetValue(shopDto.TenantId.Value, out var tenantName))
+                query = ApplySorting(query, input);
+                query = ApplyPaging(query, input);
+                items = await MapToGetListOutputDtosAsync(await base.AsyncExecuter.ToListAsync(query).ConfigureAwait(continueOnCapturedContext: false)).ConfigureAwait(continueOnCapturedContext: false);
+            }
+
+            var result = new PagedResultDto<ShopDto>(totalCount, items);
+            // Include tenant names for all shops
+            if (result.Items != null && result.Items.Any())
+            {
+                var tenantIds = result.Items.Where(x => x.TenantId.HasValue).Select(x => x.TenantId.Value).Distinct().ToList();
+                var tenants = await _tenantRepository.GetListAsync();
+                var tenantDict = tenants.Where(t => tenantIds.Contains(t.Id)).ToDictionary(t => t.Id, t => t.Name);
+
+                foreach (var shopDto in result.Items)
                 {
-                    shopDto.TenantName = tenantName;
+                    if (shopDto.TenantId.HasValue && tenantDict.TryGetValue(shopDto.TenantId.Value, out var tenantName))
+                    {
+                        shopDto.TenantName = tenantName;
+                    }
                 }
             }
-        }
 
-        return result;
+            return result;
+        }
     }
 
     public async Task<ShopDto> ActivateAsync(Guid id)
