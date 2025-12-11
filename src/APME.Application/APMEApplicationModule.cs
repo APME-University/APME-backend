@@ -3,6 +3,7 @@ using Volo.Abp.AutoMapper;
 using Volo.Abp.FeatureManagement;
 using Volo.Abp.Identity;
 using Volo.Abp.Modularity;
+using Volo.Abp.MultiTenancy;
 using Volo.Abp.PermissionManagement;
 using Volo.Abp.SettingManagement;
 using Volo.Abp.TenantManagement;
@@ -26,6 +27,10 @@ public class APMEApplicationModule : AbpModule
         Configure<AbpAutoMapperOptions>(options =>
         {
             options.AddMaps<APMEApplicationModule>();
+        });
+        Configure<AbpMultiTenancyOptions>(options =>
+        {
+            options.IsEnabled = true;
         });
     }
 }
