@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Volo.Abp.Domain.Entities.Auditing;
 using Volo.Abp.MultiTenancy;
 
@@ -31,6 +32,10 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
     public bool IsPublished { get; set; }
 
     public string? Attributes { get; set; } // JSONB for dynamic attributes (EAV pattern)
+
+    public string? PrimaryImageUrl { get; set; } // Main product image
+
+    public string? ImageUrls { get; set; } // JSON array of image URLs for gallery
 
     protected Product()
     {
@@ -166,6 +171,51 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
     public bool IsOnSale()
     {
         return CompareAtPrice.HasValue && CompareAtPrice.Value > Price;
+    }
+
+    public void SetPrimaryImage(string imageUrl)
+    {
+        PrimaryImageUrl = imageUrl;
+    }
+
+    public void AddImage(string imageUrl)
+    {
+        var imageList = GetImageList();
+        if (!imageList.Contains(imageUrl))
+        {
+            imageList.Add(imageUrl);
+            ImageUrls = System.Text.Json.JsonSerializer.Serialize(imageList);
+        }
+    }
+
+    public void RemoveImage(string imageUrl)
+    {
+        var imageList = GetImageList();
+        imageList.Remove(imageUrl);
+        ImageUrls = imageList.Count > 0 ? System.Text.Json.JsonSerializer.Serialize(imageList) : null;
+        
+        // If removed image was primary, clear primary image
+        if (PrimaryImageUrl == imageUrl)
+        {
+            PrimaryImageUrl = imageList.Count > 0 ? imageList[0] : null;
+        }
+    }
+
+    public List<string> GetImageList()
+    {
+        if (string.IsNullOrWhiteSpace(ImageUrls))
+        {
+            return new List<string>();
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<string>>(ImageUrls) ?? new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
     }
 }
 

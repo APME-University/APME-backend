@@ -175,6 +175,8 @@ public class APMEDbContext :
             b.Property(x => x.Price).HasColumnType("decimal(18,2)");
             b.Property(x => x.CompareAtPrice).HasColumnType("decimal(18,2)");
             b.Property(x => x.Attributes).HasColumnType("jsonb");
+            b.Property(x => x.PrimaryImageUrl).HasMaxLength(512);
+            b.Property(x => x.ImageUrls).HasColumnType("jsonb");
 
             // Foreign keys
             b.HasOne<Shop>()

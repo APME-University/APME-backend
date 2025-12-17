@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Volo.Abp.Application.Dtos;
 
 namespace APME.Products;
@@ -29,8 +30,16 @@ public class ProductDto : FullAuditedEntityDto<Guid>
 
     public string? Attributes { get; set; }
 
+    public string? PrimaryImageUrl { get; set; }
+
+    public List<string>? ImageUrls { get; set; }
+
     public bool IsInStock => StockQuantity > 0;
 
     public bool IsOnSale => CompareAtPrice.HasValue && CompareAtPrice.Value > Price;
+
+    public bool HasImages => ImageUrls != null && ImageUrls.Count > 0;
+
+    public int ImageCount => ImageUrls?.Count ?? 0;
 }
 
