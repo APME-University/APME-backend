@@ -31,8 +31,10 @@ public class APMEApplicationAutoMapperProfile : Profile
 
         // Product mappings
         CreateMap<Product, ProductDto>()
+            .ForMember(dest => dest.ImageUrls, opt => opt.Ignore()) // Ignore automatic mapping, handle manually in AfterMap
             .AfterMap((src, dest) =>
             {
+                // Manually map ImageUrls from JSON string to List<string>
                 if (string.IsNullOrWhiteSpace(src.ImageUrls))
                 {
                     dest.ImageUrls = new List<string>();
