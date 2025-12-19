@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using APME.BlobStorage;
@@ -53,6 +54,45 @@ public class CategoryAppService : CrudAppService<Category, CategoryDto, Guid, Ge
         return MapToGetOutputDto(category);
     }
 
+    public override async Task<CategoryDto> UpdateAsync(Guid id, [FromForm] CreateUpdateCategoryDto input)
+    {
+        var category = await Repository.GetAsync(id);
+        
+        // Map input to entity
+        MapToEntity(input, category);
+        
+        // Handle image update: delete old image if new one is provided
+        if (input.Image is not null)
+        {
+            // Delete old image if exists
+            if (!string.IsNullOrWhiteSpace(category.ImageUrl))
+            {
+                var oldBlobName = ExtractBlobNameFromUrl(category.ImageUrl);
+                if (!string.IsNullOrWhiteSpace(oldBlobName))
+                {
+                    using (CurrentTenant.Change(null))
+                    {
+                        try
+                        {
+                            await _container.DeleteAsync(oldBlobName);
+                        }
+                        catch
+                        {
+                            // Ignore if blob doesn't exist
+                        }
+                    }
+                }
+            }
+            
+            // Save new image
+            await SaveImage(category, input.Image);
+        }
+        
+        await Repository.UpdateAsync(category, autoSave: true);
+        
+        return MapToGetOutputDto(category);
+    }
+
     public async Task<string> UploadCategoryImageAsync(Guid categoryId, IFormFile file)
     {
         var category = await Repository.GetAsync(categoryId);
@@ -60,22 +100,37 @@ public class CategoryAppService : CrudAppService<Category, CategoryDto, Guid, Ge
         // Delete old image if exists
         if (!string.IsNullOrWhiteSpace(category.ImageUrl))
         {
-            await DeleteCategoryImageAsync(categoryId);
+            var oldBlobName = ExtractBlobNameFromUrl(category.ImageUrl);
+            if (!string.IsNullOrWhiteSpace(oldBlobName))
+            {
+                using (CurrentTenant.Change(null))
+                {
+                    try
+                    {
+                        await _container.DeleteAsync(oldBlobName);
+                    }
+                    catch
+                    {
+                        // Ignore if blob doesn't exist
+                    }
+                }
+            }
         }
         
-        // Save image to blob storage
-        var blobName = await _blobStorageService.SaveCategoryImageAsync(file, categoryId);
+        // Save new image to blob storage (store blob name, not full URL)
+        using (CurrentTenant.Change(null))
+        {
+            string imageName = GuidGenerator.Create() + Regex.Replace(file.FileName ?? "image", @"\s+", string.Empty);
+            using var stream = file.OpenReadStream();
+            await _container.SaveAsync(imageName, stream, false);
         
-        // Construct image URL - ABP auto controllers will expose this at /api/app/category/{categoryId}/upload-category-image
-        // Store blob name for retrieval, URL will be constructed when needed
-        var baseUrl = _configuration["App:SelfUrl"]?.TrimEnd('/') ?? "";
-        var imageUrl = $"{baseUrl}/api/app/category/{categoryId}/get-category-image/{blobName}";
-        
-        // Update category with new image URL
-        category.ImageUrl = imageUrl;
-        await Repository.UpdateAsync(category);
-        
-        return imageUrl;
+            // Store blob name (not full URL) - will be converted to full URL in MapToGetOutputDto
+            category.ImageUrl = imageName;
+            await Repository.UpdateAsync(category, autoSave: true);
+            
+            // Return full URL for immediate use
+            return GetPhysicalPathByName(imageName);
+        }
     }
 
     public async Task DeleteCategoryImageAsync(Guid categoryId)
@@ -87,18 +142,28 @@ public class CategoryAppService : CrudAppService<Category, CategoryDto, Guid, Ge
             return; // No image to delete
         }
         
-        // Extract blob name from URL
+        // Extract blob name from URL or blob name
         var blobName = ExtractBlobNameFromUrl(category.ImageUrl);
         
         // Delete from blob storage
         if (!string.IsNullOrWhiteSpace(blobName))
         {
-            await _blobStorageService.DeleteCategoryImageAsync(blobName);
+            using (CurrentTenant.Change(null))
+            {
+                try
+                {
+                    await _container.DeleteAsync(blobName);
+                }
+                catch
+                {
+                    // Ignore if blob doesn't exist
+                }
+            }
         }
         
         // Clear image URL from category
         category.ImageUrl = null;
-        await Repository.UpdateAsync(category);
+        await Repository.UpdateAsync(category, autoSave: true);
     }
 
     private string ExtractBlobNameFromUrl(string imageUrl)
@@ -108,15 +173,36 @@ public class CategoryAppService : CrudAppService<Category, CategoryDto, Guid, Ge
             return null;
         }
 
-        // Extract blob name from URL like: /api/app/category/{categoryId}/image/{blobName}
-        var parts = imageUrl.Split('/');
-        var imageIndex = Array.IndexOf(parts, "image");
-        if (imageIndex >= 0 && imageIndex < parts.Length - 1)
+        // If it's already a blob name (no http/https), return as-is
+        if (!imageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
         {
-            return parts[imageIndex + 1];
+            return imageUrl;
         }
 
-        // If URL format is different, try to extract filename
+        // Extract blob name from physical path URL (following ProductAppService pattern)
+        // URL format: http://domain/wwwroot/uploads/images/{blobName}
+        var wwwrootIndex = imageUrl.IndexOf("wwwroot", StringComparison.OrdinalIgnoreCase);
+        if (wwwrootIndex >= 0)
+        {
+            var pathAfterWwwroot = imageUrl.Substring(wwwrootIndex + "wwwroot".Length);
+            // Remove leading slashes and get the blob name (last part after /images/)
+            var parts = pathAfterWwwroot.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            var imagesIndex = Array.IndexOf(parts, "images");
+            if (imagesIndex >= 0 && imagesIndex < parts.Length - 1)
+        {
+                return parts[imagesIndex + 1];
+            }
+        }
+
+        // Fallback: try to extract from URL path segments
+        var urlParts = imageUrl.Split('/');
+        var lastPart = urlParts.LastOrDefault();
+        if (!string.IsNullOrWhiteSpace(lastPart))
+        {
+            return lastPart;
+        }
+
+        // Last resort: extract filename
         return System.IO.Path.GetFileName(imageUrl);
     }
 
@@ -162,6 +248,32 @@ public class CategoryAppService : CrudAppService<Category, CategoryDto, Guid, Ge
             await _container.SaveAsync(imageName, image.GetStream());
             category.ImageUrl = imageName;
         }
+    }
+
+    protected override async Task<IQueryable<Category>> CreateFilteredQueryAsync(GetCategoryListInput input)
+    {
+        var queryable = await Repository.GetQueryableAsync();
+        
+        // Apply standard filter (handled by base class for Filter property)
+        queryable = await base.CreateFilteredQueryAsync(input);
+        
+        // Apply custom filters following ABP.IO practices
+        if (input.ShopId.HasValue)
+        {
+            queryable = queryable.Where(x => x.ShopId == input.ShopId.Value);
+        }
+        
+        if (input.ParentId.HasValue)
+        {
+            queryable = queryable.Where(x => x.ParentId == input.ParentId.Value);
+        }
+        
+        if (input.IsActive.HasValue)
+        {
+            queryable = queryable.Where(x => x.IsActive == input.IsActive.Value);
+        }
+        
+        return queryable;
     }
 
     protected override CategoryDto MapToGetOutputDto(Category entity)

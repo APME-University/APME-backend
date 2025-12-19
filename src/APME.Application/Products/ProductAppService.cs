@@ -14,6 +14,7 @@ using Volo.Abp.Application.Services;
 using Volo.Abp.BlobStoring;
 using Volo.Abp.BlobStoring.FileSystem;
 using Volo.Abp.Content;
+using Volo.Abp.Data;
 using Volo.Abp.Domain.Repositories;
 using Volo.Abp.MultiTenancy;
 
@@ -73,25 +74,18 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
 
     public override async Task<ProductDto> UpdateAsync(Guid id, [FromForm] CreateUpdateProductDto input)
     {
+        // Note: Image operations (add, remove, set primary) are handled by separate APIs
+        // to avoid concurrency issues. This method only updates product properties.
+        
         var product = await Repository.GetAsync(id);
         
         // Validate and normalize attributes
         input.Attributes = await ValidateAndNormalizeAttributesAsync(input.Attributes, product.ShopId);
         
-        // Map input to entity
+        // Map input to entity (ImageUrls and PrimaryImageUrl are ignored in AutoMapper)
         MapToEntity(input, product);
         
-        // Save new images if provided (adds to existing images, doesn't replace) - following Court pattern
-        if (input.Images is not null && input.Images.Any())
-        {
-            await SaveImages(input.Images, product);
-        }
-        else if (input.Image is not null)
-        {
-            // Backward compatibility: single image
-            await SaveImage(product, input.Image, isPrimary: false);
-        }
-        
+        // Update product without touching images
         await Repository.UpdateAsync(product, autoSave: true);
         
         return MapToGetOutputDto(product);
@@ -237,13 +231,34 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         }
         
         // Verify image exists in product's image list (compare blob names)
+        // Use case-insensitive comparison and handle URL-encoded names
         var imageList = product.GetImageList();
-        if (!imageList.Contains(blobName))
+        var matchingImage = imageList.FirstOrDefault(img => 
+            string.Equals(img, blobName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(ExtractBlobNameFromUrl(img), blobName, StringComparison.OrdinalIgnoreCase)
+        );
+        
+        if (string.IsNullOrWhiteSpace(matchingImage))
         {
-            throw new InvalidOperationException($"Image {blobName} does not exist for product {productId}");
+            // Try to find by comparing just the filename part
+            var blobFileName = System.IO.Path.GetFileName(blobName);
+            matchingImage = imageList.FirstOrDefault(img => 
+                string.Equals(System.IO.Path.GetFileName(img), blobFileName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(System.IO.Path.GetFileName(ExtractBlobNameFromUrl(img)), blobFileName, StringComparison.OrdinalIgnoreCase)
+            );
         }
         
-        product.SetPrimaryImage(blobName);
+        if (string.IsNullOrWhiteSpace(matchingImage))
+        {
+            throw new InvalidOperationException(
+                $"Image '{blobName}' does not exist for product {productId}. " +
+                $"Available images: {string.Join(", ", imageList)}"
+            );
+        }
+        
+        // Use the actual blob name from the product's image list
+        var actualBlobName = ExtractBlobNameFromUrl(matchingImage) ?? matchingImage;
+        product.SetPrimaryImage(actualBlobName);
         await Repository.UpdateAsync(product, autoSave: true);
     }
 
@@ -285,37 +300,51 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
             return null;
         }
 
+        // URL decode the input first (handles %5C, %2F, etc.)
+        string decodedUrl = Uri.UnescapeDataString(imageUrl);
+
         // If it's already a blob name (no http/https), return as-is
-        if (!imageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        if (!decodedUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
         {
-            return imageUrl;
+            return decodedUrl;
         }
 
         // Extract blob name from physical path URL (following Court pattern)
         // URL format: http://domain/wwwroot/uploads/images/{blobName}
-        var wwwrootIndex = imageUrl.IndexOf("wwwroot", StringComparison.OrdinalIgnoreCase);
-        if (wwwrootIndex >= 0)
+        // Also handle: http://domain/uploads/images/{blobName} or http://domain\uploads\images\{blobName}
+        var wwwrootIndex = decodedUrl.IndexOf("wwwroot", StringComparison.OrdinalIgnoreCase);
+        string pathToProcess = wwwrootIndex >= 0 
+            ? decodedUrl.Substring(wwwrootIndex + "wwwroot".Length)
+            : decodedUrl;
+
+        // Split by both forward and back slashes (handles URL-encoded backslashes)
+        var parts = pathToProcess.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        
+        // Find the last "images" segment and get the blob name after it
+        for (int i = parts.Length - 1; i >= 0; i--)
         {
-            var pathAfterWwwroot = imageUrl.Substring(wwwrootIndex + "wwwroot".Length);
-            // Remove leading slashes and get the blob name (last part after /images/)
-            var parts = pathAfterWwwroot.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-            var imagesIndex = Array.IndexOf(parts, "images");
-            if (imagesIndex >= 0 && imagesIndex < parts.Length - 1)
+            if (string.Equals(parts[i], "images", StringComparison.OrdinalIgnoreCase) && i < parts.Length - 1)
             {
-                return parts[imagesIndex + 1];
+                // Found "images" segment, return the next part (blob name)
+                return parts[i + 1];
             }
         }
 
-        // Fallback: try to extract from URL path segments
-        var urlParts = imageUrl.Split('/');
-        var lastPart = urlParts.LastOrDefault();
+        // Fallback: get the last part of the path (should be the blob name)
+        var lastPart = parts.LastOrDefault();
         if (!string.IsNullOrWhiteSpace(lastPart))
         {
+            // Remove query parameters if present
+            var queryIndex = lastPart.IndexOf('?');
+            if (queryIndex >= 0)
+            {
+                lastPart = lastPart.Substring(0, queryIndex);
+            }
             return lastPart;
         }
 
-        // Last resort: extract filename
-        return System.IO.Path.GetFileName(imageUrl);
+        // Last resort: extract filename from the full URL
+        return System.IO.Path.GetFileName(decodedUrl);
     }
 
     private string GetPhysicalPathByName(string name)
@@ -343,12 +372,14 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
             }));
             
             // Add images to product's image list (following Court pattern)
+            // Note: This modifies ImageUrls property, which EF Core tracks for concurrency
             foreach (var blobName in imageNames)
             {
                 product.AddImage(blobName);
             }
             
             // Set first image as primary if no primary exists
+            // Note: This modifies PrimaryImageUrl property, which EF Core tracks for concurrency
             if (imageNames.Length > 0 && string.IsNullOrWhiteSpace(product.PrimaryImageUrl))
             {
                 product.SetPrimaryImage(imageNames[0]);
@@ -373,9 +404,11 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
             var blobName = imageName;
             
             // Add image to product's image list
+            // Note: This modifies ImageUrls property, which EF Core tracks for concurrency
             product.AddImage(blobName);
             
             // Set as primary if requested or if no primary exists
+            // Note: This modifies PrimaryImageUrl property, which EF Core tracks for concurrency
             if (isPrimary || string.IsNullOrWhiteSpace(product.PrimaryImageUrl))
             {
                 product.SetPrimaryImage(blobName);
@@ -384,6 +417,42 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
             // Force garbage collection like Court does (for large images)
             GC.Collect();
         }
+    }
+
+    protected override async Task<IQueryable<Product>> CreateFilteredQueryAsync(GetProductListInput input)
+    {
+        var queryable = await Repository.GetQueryableAsync();
+        
+        // Apply standard filter (handled by base class for Filter property)
+        queryable = await base.CreateFilteredQueryAsync(input);
+        
+        // Apply custom filters following ABP.IO practices
+        if (input.ShopId.HasValue)
+        {
+            queryable = queryable.Where(x => x.ShopId == input.ShopId.Value);
+        }
+        
+        if (input.CategoryId.HasValue)
+        {
+            queryable = queryable.Where(x => x.CategoryId == input.CategoryId.Value);
+        }
+        
+        if (input.IsActive.HasValue)
+        {
+            queryable = queryable.Where(x => x.IsActive == input.IsActive.Value);
+        }
+        
+        if (input.IsPublished.HasValue)
+        {
+            queryable = queryable.Where(x => x.IsPublished == input.IsPublished.Value);
+        }
+        
+        if (input.InStock.HasValue && input.InStock.Value)
+        {
+            queryable = queryable.Where(x => x.StockQuantity > 0);
+        }
+        
+        return queryable;
     }
 
     protected override ProductDto MapToGetOutputDto(Product entity)

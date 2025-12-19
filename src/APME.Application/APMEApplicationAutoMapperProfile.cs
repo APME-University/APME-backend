@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using AutoMapper;
@@ -54,7 +54,8 @@ public class APMEApplicationAutoMapperProfile : Profile
         
         CreateMap<CreateUpdateProductDto, Product>()
             .ForMember(dest => dest.ImageUrls, opt => opt.Ignore()) // ImageUrls handled separately via upload endpoints
-            .ForMember(dest => dest.PrimaryImageUrl, opt => opt.Ignore()); // PrimaryImageUrl handled separately
+            .ForMember(dest => dest.PrimaryImageUrl, opt => opt.Ignore()) // PrimaryImageUrl handled separately
+            .ForMember(dest => dest.ConcurrencyStamp, opt => opt.Ignore()); // Preserve ConcurrencyStamp for updates
 
         // ProductAttribute mappings
         CreateMap<ProductAttribute, ProductAttributeDto>();
