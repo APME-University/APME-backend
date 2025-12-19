@@ -4,6 +4,7 @@ using Volo.Abp.BackgroundJobs.EntityFrameworkCore;
 using Volo.Abp.Data;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.EntityFrameworkCore;
+using Volo.Abp.EntityFrameworkCore.Modeling;
 using Volo.Abp.FeatureManagement.EntityFrameworkCore;
 using Volo.Abp.Identity;
 using Volo.Abp.Identity.EntityFrameworkCore;
@@ -33,6 +34,7 @@ public class APMEDbContext :
     // E-commerce entities
     public DbSet<Shop> Shops { get; set; }
     public DbSet<Customer> Customers { get; set; }
+    public DbSet<CustomerUserRole> CustomerUserRoles { get; set; }
     public DbSet<Category> Categories { get; set; }
     public DbSet<Product> Products { get; set; }
     public DbSet<ProductAttribute> ProductAttributes { get; set; }
@@ -122,12 +124,37 @@ public class APMEDbContext :
 
             b.Property(x => x.FirstName).IsRequired().HasMaxLength(128);
             b.Property(x => x.LastName).IsRequired().HasMaxLength(128);
-            b.Property(x => x.PhoneNumber).HasMaxLength(32);
+            b.Property(x => x.PhoneNumber).IsRequired(false).HasMaxLength(32); // PhoneNumber is optional
+            b.Property(x => x.Email).HasMaxLength(256);
+            b.Property(x => x.NormalizedEmail).HasMaxLength(256);
+            b.Property(x => x.UserName).HasMaxLength(256);
+            b.Property(x => x.NormalizedUserName).HasMaxLength(256);
+            b.Property(x => x.PasswordHash).HasMaxLength(256);
+            b.Property(x => x.SecurityStamp).HasMaxLength(256);
+
+            // Configure relationships
+            // Note: IdentityUserClaim, IdentityUserLogin, IdentityUserToken relationships
+            // are handled by the Identity system through the store implementation.
+            // Only configure CustomerUserRole which uses a custom table.
+            b.HasMany(x => x.Roles)
+                .WithOne(ur => ur.Customer)
+                .HasForeignKey(ur => ur.UserId)
+                .IsRequired();
 
             // Indexes
             b.HasIndex(x => x.TenantId);
-            b.HasIndex(x => x.UserId);
-            b.HasIndex(x => new { x.TenantId, x.UserId }).IsUnique();
+            b.HasIndex(x => x.Email);
+            b.HasIndex(x => x.NormalizedEmail);
+            b.HasIndex(x => x.UserName);
+            b.HasIndex(x => x.NormalizedUserName);
+            b.HasIndex(x => x.PhoneNumber);
+        });
+
+        builder.Entity<CustomerUserRole>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "CustomerUserRole", APMEConsts.DbSchema);
+            b.HasKey(ur => new { ur.UserId, ur.RoleId });
+            b.ConfigureByConvention();
         });
     }
 
