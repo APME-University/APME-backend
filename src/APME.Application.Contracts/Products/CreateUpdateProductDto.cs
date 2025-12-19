@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using Volo.Abp.Content;
 
 namespace APME.Products;
 
@@ -40,5 +42,9 @@ public class CreateUpdateProductDto
     public bool IsPublished { get; set; }
 
     public string? Attributes { get; set; }
+
+    // Support both single image (backward compatibility) and multiple images (Court pattern)
+    public IRemoteStreamContent? Image { get; set; }
+    public IList<IRemoteStreamContent>? Images { get; set; }
 }
 

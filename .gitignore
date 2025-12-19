@@ -263,3 +263,4 @@ src/APME.Blazor.Server.Tiered/Logs/*
 
 # Use abp install-libs to restore.
 **/wwwroot/libs/*
+/src/APME.HttpApi.Host/wwwroot/uploads/images/host/images
