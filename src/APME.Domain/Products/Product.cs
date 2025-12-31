@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using Volo.Abp;
 using Volo.Abp.Domain.Entities.Auditing;
 using Volo.Abp.MultiTenancy;
 
@@ -31,6 +34,21 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
     public bool IsPublished { get; set; }
 
     public string? Attributes { get; set; } // JSONB for dynamic attributes (EAV pattern)
+
+    public string? PrimaryImageUrl { get; set; } // Main product image
+
+    public string? ImageUrls { get; set; } // JSON array of image URLs for gallery
+
+    /// <summary>
+    /// Low stock threshold for inventory alerts (FR14.5)
+    /// </summary>
+    public int LowStockThreshold { get; set; } = 10;
+
+    /// <summary>
+    /// Concurrency stamp for optimistic locking during stock updates
+    /// </summary>
+    [ConcurrencyCheck]
+    public string StockConcurrencyStamp { get; protected set; } = Guid.NewGuid().ToString("N");
 
     protected Product()
     {
@@ -118,6 +136,7 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
             throw new ArgumentException("Quantity cannot be negative", nameof(quantity));
         }
         StockQuantity += quantity;
+        UpdateStockConcurrencyStamp();
     }
 
     public void DecreaseStock(int quantity)
@@ -131,6 +150,71 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
             throw new InvalidOperationException("Insufficient stock");
         }
         StockQuantity -= quantity;
+        UpdateStockConcurrencyStamp();
+    }
+
+    /// <summary>
+    /// Atomically deducts stock with optimistic concurrency control
+    /// Throws BusinessException if insufficient stock
+    /// Updates ConcurrencyStamp to detect concurrent modifications
+    /// </summary>
+    public void DeductStockAtomic(int quantity)
+    {
+        if (quantity <= 0)
+        {
+            throw new ArgumentException("Quantity must be positive", nameof(quantity));
+        }
+
+        if (StockQuantity < quantity)
+        {
+            throw new BusinessException("APME:InsufficientStock")
+                .WithData("ProductId", Id)
+                .WithData("ProductName", Name)
+                .WithData("Available", StockQuantity)
+                .WithData("Requested", quantity);
+        }
+
+        StockQuantity -= quantity;
+        UpdateStockConcurrencyStamp();
+    }
+
+    /// <summary>
+    /// Restores stock (e.g., when order is cancelled)
+    /// </summary>
+    public void RestoreStock(int quantity)
+    {
+        if (quantity <= 0)
+        {
+            throw new ArgumentException("Quantity must be positive", nameof(quantity));
+        }
+
+        StockQuantity += quantity;
+        UpdateStockConcurrencyStamp();
+    }
+
+    /// <summary>
+    /// Checks if stock is below the low threshold
+    /// </summary>
+    public bool IsLowStock()
+    {
+        return StockQuantity <= LowStockThreshold && StockQuantity > 0;
+    }
+
+    /// <summary>
+    /// Sets the low stock threshold
+    /// </summary>
+    public void SetLowStockThreshold(int threshold)
+    {
+        if (threshold < 0)
+        {
+            throw new ArgumentException("Threshold cannot be negative", nameof(threshold));
+        }
+        LowStockThreshold = threshold;
+    }
+
+    private void UpdateStockConcurrencyStamp()
+    {
+        StockConcurrencyStamp = Guid.NewGuid().ToString("N");
     }
 
     public void SetCategory(Guid? categoryId)
@@ -166,6 +250,51 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
     public bool IsOnSale()
     {
         return CompareAtPrice.HasValue && CompareAtPrice.Value > Price;
+    }
+
+    public void SetPrimaryImage(string imageUrl)
+    {
+        PrimaryImageUrl = imageUrl;
+    }
+
+    public void AddImage(string imageUrl)
+    {
+        var imageList = GetImageList();
+        if (!imageList.Contains(imageUrl))
+        {
+            imageList.Add(imageUrl);
+            ImageUrls = System.Text.Json.JsonSerializer.Serialize(imageList);
+        }
+    }
+
+    public void RemoveImage(string imageUrl)
+    {
+        var imageList = GetImageList();
+        imageList.Remove(imageUrl);
+        ImageUrls = imageList.Count > 0 ? System.Text.Json.JsonSerializer.Serialize(imageList) : null;
+        
+        // If removed image was primary, clear primary image
+        if (PrimaryImageUrl == imageUrl)
+        {
+            PrimaryImageUrl = imageList.Count > 0 ? imageList[0] : null;
+        }
+    }
+
+    public List<string> GetImageList()
+    {
+        if (string.IsNullOrWhiteSpace(ImageUrls))
+        {
+            return new List<string>();
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<string>>(ImageUrls) ?? new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
     }
 }
 

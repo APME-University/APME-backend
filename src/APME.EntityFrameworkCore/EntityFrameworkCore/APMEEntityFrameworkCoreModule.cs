@@ -12,6 +12,8 @@ using Volo.Abp.OpenIddict.EntityFrameworkCore;
 using Volo.Abp.PermissionManagement.EntityFrameworkCore;
 using Volo.Abp.SettingManagement.EntityFrameworkCore;
 using Volo.Abp.TenantManagement.EntityFrameworkCore;
+using APME.Carts;
+using APME.Orders;
 
 namespace APME.EntityFrameworkCore;
 
@@ -44,6 +46,10 @@ public class APMEEntityFrameworkCoreModule : AbpModule
                 /* Remove "includeAllEntities: true" to create
                  * default repositories only for aggregate roots */
             options.AddDefaultRepositories(includeAllEntities: true);
+            
+            // Register custom repositories
+            options.AddRepository<Cart, CartRepository>();
+            options.AddRepository<Order, OrderRepository>();
         });
 
         Configure<AbpDbContextOptions>(options =>

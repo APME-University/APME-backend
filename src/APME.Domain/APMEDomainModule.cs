@@ -1,5 +1,7 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using APME.Customers;
 using APME.MultiTenancy;
 using Volo.Abp.AuditLogging;
 using Volo.Abp.BackgroundJobs;
@@ -59,6 +61,21 @@ public class APMEDomainModule : AbpModule
         Configure<AbpMultiTenancyOptions>(options =>
         {
             options.IsEnabled = MultiTenancyConsts.IsEnabled;
+        });
+
+        // Configure Customer Identity Core (separate from IdentityUser)
+        context.Services.AddIdentityCore<Customer>()
+            .AddRoles<IdentityRole>()
+            .AddClaimsPrincipalFactory<CustomerClaimsPrincipalFactory>();
+        context.Services.TryAddScoped<CustomerStore>();
+        context.Services.TryAddScoped(typeof(IUserStore<Customer>), provider => provider.GetService(typeof(CustomerStore)));
+        context.Services.TryAddScoped<CustomerUserManager>();
+        context.Services.TryAddScoped(typeof(UserManager<Customer>), provider => provider.GetService<CustomerUserManager>());
+
+        Configure<IdentityOptions>(options =>
+        {
+            // Allow non-unique email for customers (they may use phone numbers primarily)
+            options.User.RequireUniqueEmail = false;
         });
 
 #if DEBUG

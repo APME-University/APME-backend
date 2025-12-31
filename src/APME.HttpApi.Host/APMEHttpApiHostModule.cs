@@ -29,6 +29,9 @@ using Volo.Abp.Security.Claims;
 using Volo.Abp.Swashbuckle;
 using Volo.Abp.UI.Navigation.Urls;
 using Volo.Abp.VirtualFileSystem;
+using Volo.Abp.BlobStoring;
+using Volo.Abp.BlobStoring.FileSystem;
+using APME.BlobStorage;
 
 namespace APME;
 
@@ -41,7 +44,8 @@ namespace APME;
     typeof(AbpAspNetCoreMvcUiLeptonXLiteThemeModule),
     typeof(AbpAccountWebOpenIddictModule),
     typeof(AbpAspNetCoreSerilogModule),
-    typeof(AbpSwashbuckleModule)
+    typeof(AbpSwashbuckleModule),
+    typeof(Volo.Abp.BlobStoring.FileSystem.AbpBlobStoringFileSystemModule)
 )]
 public class APMEHttpApiHostModule : AbpModule
 {
@@ -70,6 +74,7 @@ public class APMEHttpApiHostModule : AbpModule
         ConfigureVirtualFileSystem(context);
         ConfigureCors(context, configuration);
         ConfigureSwaggerServices(context, configuration);
+        ConfigureBlobStorage(context, hostingEnvironment);
     }
 
     private void ConfigureAuthentication(ServiceConfigurationContext context)
@@ -171,6 +176,26 @@ public class APMEHttpApiHostModule : AbpModule
                     .AllowAnyHeader()
                     .AllowAnyMethod()
                     .AllowCredentials();
+            });
+        });
+    }
+
+    private void ConfigureBlobStorage(ServiceConfigurationContext context, IHostEnvironment hostingEnvironment)
+    {
+        Configure<AbpBlobStoringOptions>(options =>
+        {
+            // Configure single images container for all images
+            options.Containers.Configure<ImageContainer>(container =>
+            {
+                container.UseFileSystem(fileSystem =>
+                {
+                    var basePath = Path.Combine(hostingEnvironment.ContentRootPath, "wwwroot", "uploads", "images");
+                    if (!Directory.Exists(basePath))
+                    {
+                        Directory.CreateDirectory(basePath);
+                    }
+                    fileSystem.BasePath = basePath;
+                });
             });
         });
     }

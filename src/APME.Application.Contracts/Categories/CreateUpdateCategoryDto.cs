@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using Volo.Abp.Content;
 
 namespace APME.Categories;
 
@@ -25,7 +26,6 @@ public class CreateUpdateCategoryDto
 
     public bool IsActive { get; set; }
 
-    [StringLength(512)]
-    public string? ImageUrl { get; set; }
+    public IRemoteStreamContent? Image { get; set; }
 }
 
