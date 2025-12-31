@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using Volo.Abp;
 using Volo.Abp.Domain.Entities.Auditing;
 using Volo.Abp.MultiTenancy;
 
@@ -36,6 +38,17 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
     public string? PrimaryImageUrl { get; set; } // Main product image
 
     public string? ImageUrls { get; set; } // JSON array of image URLs for gallery
+
+    /// <summary>
+    /// Low stock threshold for inventory alerts (FR14.5)
+    /// </summary>
+    public int LowStockThreshold { get; set; } = 10;
+
+    /// <summary>
+    /// Concurrency stamp for optimistic locking during stock updates
+    /// </summary>
+    [ConcurrencyCheck]
+    public string StockConcurrencyStamp { get; protected set; } = Guid.NewGuid().ToString("N");
 
     protected Product()
     {
@@ -123,6 +136,7 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
             throw new ArgumentException("Quantity cannot be negative", nameof(quantity));
         }
         StockQuantity += quantity;
+        UpdateStockConcurrencyStamp();
     }
 
     public void DecreaseStock(int quantity)
@@ -136,6 +150,71 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
             throw new InvalidOperationException("Insufficient stock");
         }
         StockQuantity -= quantity;
+        UpdateStockConcurrencyStamp();
+    }
+
+    /// <summary>
+    /// Atomically deducts stock with optimistic concurrency control
+    /// Throws BusinessException if insufficient stock
+    /// Updates ConcurrencyStamp to detect concurrent modifications
+    /// </summary>
+    public void DeductStockAtomic(int quantity)
+    {
+        if (quantity <= 0)
+        {
+            throw new ArgumentException("Quantity must be positive", nameof(quantity));
+        }
+
+        if (StockQuantity < quantity)
+        {
+            throw new BusinessException("APME:InsufficientStock")
+                .WithData("ProductId", Id)
+                .WithData("ProductName", Name)
+                .WithData("Available", StockQuantity)
+                .WithData("Requested", quantity);
+        }
+
+        StockQuantity -= quantity;
+        UpdateStockConcurrencyStamp();
+    }
+
+    /// <summary>
+    /// Restores stock (e.g., when order is cancelled)
+    /// </summary>
+    public void RestoreStock(int quantity)
+    {
+        if (quantity <= 0)
+        {
+            throw new ArgumentException("Quantity must be positive", nameof(quantity));
+        }
+
+        StockQuantity += quantity;
+        UpdateStockConcurrencyStamp();
+    }
+
+    /// <summary>
+    /// Checks if stock is below the low threshold
+    /// </summary>
+    public bool IsLowStock()
+    {
+        return StockQuantity <= LowStockThreshold && StockQuantity > 0;
+    }
+
+    /// <summary>
+    /// Sets the low stock threshold
+    /// </summary>
+    public void SetLowStockThreshold(int threshold)
+    {
+        if (threshold < 0)
+        {
+            throw new ArgumentException("Threshold cannot be negative", nameof(threshold));
+        }
+        LowStockThreshold = threshold;
+    }
+
+    private void UpdateStockConcurrencyStamp()
+    {
+        StockConcurrencyStamp = Guid.NewGuid().ToString("N");
     }
 
     public void SetCategory(Guid? categoryId)
