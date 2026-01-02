@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using APME.BlobStorage;
 using APME.Carts;
 using APME.Customers;
 using APME.Events;
@@ -39,6 +40,7 @@ public class CheckoutAppService : ApplicationService, ICheckoutAppService
     private readonly ICurrentUser _currentUser;
     private readonly IDataFilter _dataFilter;
     private readonly ILogger<CheckoutAppService> _logger;
+    private readonly IImageUrlProvider _imageUrlProvider;
 
     public CheckoutAppService(
         ICartRepository cartRepository,
@@ -50,7 +52,8 @@ public class CheckoutAppService : ApplicationService, ICheckoutAppService
         IDistributedEventBus eventBus,
         ICurrentUser currentUser,
         IDataFilter dataFilter,
-        ILogger<CheckoutAppService> logger)
+        ILogger<CheckoutAppService> logger,
+        IImageUrlProvider imageUrlProvider)
     {
         _cartRepository = cartRepository;
         _orderRepository = orderRepository;
@@ -62,6 +65,7 @@ public class CheckoutAppService : ApplicationService, ICheckoutAppService
         _currentUser = currentUser;
         _dataFilter = dataFilter;
         _logger = logger;
+        _imageUrlProvider = imageUrlProvider;
     }
 
     /// <inheritdoc />
@@ -321,6 +325,10 @@ public class CheckoutAppService : ApplicationService, ICheckoutAppService
                 // Calculate item tax
                 var itemTax = Math.Round(cartItem.GetLineTotal() * 0.08m, 2);
 
+                // Get the image URL, converting blob name to full URL for order snapshot
+                var orderItemImageUrl = _imageUrlProvider.GetFullImageUrl(
+                    cartItem.ProductImageUrl ?? product.PrimaryImageUrl);
+
                 // Add item with shopId (multi-shop support)
                 order.AddItem(
                     cartItem.ShopId, // ShopId is now per-item
@@ -331,7 +339,7 @@ public class CheckoutAppService : ApplicationService, ICheckoutAppService
                     cartItem.UnitPrice,
                     0, // No item-level discount
                     itemTax,
-                    cartItem.ProductImageUrl ?? product.PrimaryImageUrl);
+                    orderItemImageUrl);
 
                 // Publish stock updated event
                 await _eventBus.PublishAsync(new StockUpdatedEto
@@ -521,6 +529,10 @@ public class CheckoutAppService : ApplicationService, ICheckoutAppService
             productMap.TryGetValue(item.ProductId, out var product);
             shopMap.TryGetValue(item.ShopId, out var shop);
 
+            // Get the image URL, converting blob name to full URL
+            var imageUrl = item.ProductImageUrl ?? product?.PrimaryImageUrl;
+            var fullImageUrl = _imageUrlProvider.GetFullImageUrl(imageUrl);
+
             return new CartItemViewDto
             {
                 Id = item.Id,
@@ -529,7 +541,7 @@ public class CheckoutAppService : ApplicationService, ICheckoutAppService
                 ProductId = item.ProductId,
                 ProductName = item.ProductName,
                 ProductSku = item.ProductSku,
-                ProductImageUrl = item.ProductImageUrl ?? product?.PrimaryImageUrl,
+                ProductImageUrl = fullImageUrl,
                 ProductSlug = product?.Slug,
                 UnitPrice = item.UnitPrice,
                 CurrentPrice = product?.Price ?? item.UnitPrice,

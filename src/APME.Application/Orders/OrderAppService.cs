@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using APME.BlobStorage;
 using APME.Checkout;
 using APME.Customers;
 using APME.Events;
@@ -33,6 +34,7 @@ public class OrderAppService : ApplicationService, IOrderAppService
     private readonly IDistributedEventBus _eventBus;
     private readonly ICurrentUser _currentUser;
     private readonly IDataFilter _dataFilter;
+    private readonly IImageUrlProvider _imageUrlProvider;
 
     public OrderAppService(
         IOrderRepository orderRepository,
@@ -41,7 +43,8 @@ public class OrderAppService : ApplicationService, IOrderAppService
         IRepository<Product, Guid> productRepository,
         IDistributedEventBus eventBus,
         ICurrentUser currentUser,
-        IDataFilter dataFilter)
+        IDataFilter dataFilter,
+        IImageUrlProvider imageUrlProvider)
     {
         _orderRepository = orderRepository;
         _customerRepository = customerRepository;
@@ -50,6 +53,7 @@ public class OrderAppService : ApplicationService, IOrderAppService
         _eventBus = eventBus;
         _currentUser = currentUser;
         _dataFilter = dataFilter;
+        _imageUrlProvider = imageUrlProvider;
     }
 
     /// <inheritdoc />
@@ -83,6 +87,10 @@ public class OrderAppService : ApplicationService, IOrderAppService
                 .Select(id => shopMap.GetValueOrDefault(id, "Unknown Shop"))
                 .ToList();
 
+            // Convert blob name to full URL for first product image
+            var firstImageUrl = order.Items.FirstOrDefault()?.ProductImageUrl;
+            var fullFirstImageUrl = _imageUrlProvider.GetFullImageUrl(firstImageUrl);
+
             return new OrderListDto
             {
                 Id = order.Id,
@@ -93,7 +101,7 @@ public class OrderAppService : ApplicationService, IOrderAppService
                 TotalAmount = order.TotalAmount,
                 Currency = order.Currency,
                 ItemCount = order.GetTotalItemCount(),
-                FirstProductImageUrl = order.Items.FirstOrDefault()?.ProductImageUrl,
+                FirstProductImageUrl = fullFirstImageUrl,
                 ShopCount = orderShopIds.Count,
                 ShopNames = orderShopNames
             };
@@ -236,7 +244,7 @@ public class OrderAppService : ApplicationService, IOrderAppService
         }
         var shopMap = shops.ToDictionary(s => s.Id, s => s.Name);
 
-        // Map items with shop info
+        // Map items with shop info, converting blob names to full URLs
         var itemDtos = order.Items.Select(item => new OrderItemDto
         {
             Id = item.Id,
@@ -245,7 +253,7 @@ public class OrderAppService : ApplicationService, IOrderAppService
             ProductId = item.ProductId,
             ProductName = item.ProductName,
             ProductSku = item.ProductSku,
-            ProductImageUrl = item.ProductImageUrl,
+            ProductImageUrl = _imageUrlProvider.GetFullImageUrl(item.ProductImageUrl),
             Quantity = item.Quantity,
             UnitPrice = item.UnitPrice,
             DiscountAmount = item.DiscountAmount,

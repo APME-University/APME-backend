@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using APME.BlobStorage;
 using APME.Customers;
 using APME.Products;
 using APME.Shops;
@@ -28,6 +29,7 @@ public class CartAppService : ApplicationService, ICartAppService
     private readonly IRepository<Shop, Guid> _shopRepository;
     private readonly ICurrentUser _currentUser;
     private readonly IDataFilter _dataFilter;
+    private readonly IImageUrlProvider _imageUrlProvider;
 
     public CartAppService(
         ICartRepository cartRepository,
@@ -35,7 +37,8 @@ public class CartAppService : ApplicationService, ICartAppService
         IRepository<Customer, Guid> customerRepository,
         IRepository<Shop, Guid> shopRepository,
         ICurrentUser currentUser,
-        IDataFilter dataFilter)
+        IDataFilter dataFilter,
+        IImageUrlProvider imageUrlProvider)
     {
         _cartRepository = cartRepository;
         _productRepository = productRepository;
@@ -43,6 +46,7 @@ public class CartAppService : ApplicationService, ICartAppService
         _shopRepository = shopRepository;
         _currentUser = currentUser;
         _dataFilter = dataFilter;
+        _imageUrlProvider = imageUrlProvider;
     }
 
     /// <inheritdoc />
@@ -446,6 +450,10 @@ public class CartAppService : ApplicationService, ICartAppService
             productMap.TryGetValue(item.ProductId, out var product);
             shopMap.TryGetValue(item.ShopId, out var shop);
 
+            // Get the image URL, converting blob name to full URL
+            var imageUrl = item.ProductImageUrl ?? product?.PrimaryImageUrl;
+            var fullImageUrl = _imageUrlProvider.GetFullImageUrl(imageUrl);
+
             return new CartItemViewDto
             {
                 Id = item.Id,
@@ -454,7 +462,7 @@ public class CartAppService : ApplicationService, ICartAppService
                 ProductId = item.ProductId,
                 ProductName = item.ProductName,
                 ProductSku = item.ProductSku,
-                ProductImageUrl = item.ProductImageUrl ?? product?.PrimaryImageUrl,
+                ProductImageUrl = fullImageUrl,
                 ProductSlug = product?.Slug,
                 UnitPrice = item.UnitPrice,
                 CurrentPrice = product?.Price ?? item.UnitPrice,
