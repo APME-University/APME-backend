@@ -1,5 +1,8 @@
 ﻿using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using Volo.Abp.Uow;
 using Volo.Abp.AuditLogging.EntityFrameworkCore;
 using Volo.Abp.BackgroundJobs.EntityFrameworkCore;
@@ -12,7 +15,9 @@ using Volo.Abp.OpenIddict.EntityFrameworkCore;
 using Volo.Abp.PermissionManagement.EntityFrameworkCore;
 using Volo.Abp.SettingManagement.EntityFrameworkCore;
 using Volo.Abp.TenantManagement.EntityFrameworkCore;
+using APME.AI;
 using APME.Carts;
+using APME.EntityFrameworkCore.AI;
 using APME.Orders;
 
 namespace APME.EntityFrameworkCore;
@@ -41,23 +46,40 @@ public class APMEEntityFrameworkCoreModule : AbpModule
 
     public override void ConfigureServices(ServiceConfigurationContext context)
     {
+        var configuration = context.Services.GetConfiguration();
+        var connectionString = configuration.GetConnectionString("Default");
+
+        // Configure NpgsqlDataSource with pgvector support
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        dataSourceBuilder.UseVector();
+        var dataSource = dataSourceBuilder.Build();
+
+        // Register the data source as singleton
+        context.Services.AddSingleton(dataSource);
+
         context.Services.AddAbpDbContext<APMEDbContext>(options =>
         {
-                /* Remove "includeAllEntities: true" to create
-                 * default repositories only for aggregate roots */
+            /* Remove "includeAllEntities: true" to create
+             * default repositories only for aggregate roots */
             options.AddDefaultRepositories(includeAllEntities: true);
             
             // Register custom repositories
             options.AddRepository<Cart, CartRepository>();
             options.AddRepository<Order, OrderRepository>();
+            options.AddRepository<ProductEmbedding, ProductEmbeddingRepository>();
         });
 
         Configure<AbpDbContextOptions>(options =>
         {
-                /* The main point to change your DBMS.
-                 * See also APMEMigrationsDbContextFactory for EF Core tooling. */
-            options.UseNpgsql();
+            /* The main point to change your DBMS.
+             * See also APMEMigrationsDbContextFactory for EF Core tooling. */
+            options.Configure(configureContext =>
+            {
+                configureContext.DbContextOptions.UseNpgsql(dataSource, npgsqlOptions =>
+                {
+                    npgsqlOptions.UseVector();
+                });
+            });
         });
-
     }
 }
