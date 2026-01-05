@@ -20,6 +20,24 @@ public class ProductAttribute : FullAuditedEntity<Guid>, IMultiTenant
 
     public int DisplayOrder { get; set; }
 
+    /// <summary>
+    /// Whether this attribute should be included in AI embeddings.
+    /// High-signal attributes improve semantic search quality.
+    /// </summary>
+    public bool IncludeInEmbedding { get; set; } = true;
+
+    /// <summary>
+    /// Priority for embedding inclusion. Higher values = more important.
+    /// Used for ranking when building canonical product documents.
+    /// </summary>
+    public int EmbeddingPriority { get; set; } = 0;
+
+    /// <summary>
+    /// Human-readable semantic label for embedding context.
+    /// Example: "Color" -> "product color", "Size" -> "available size"
+    /// </summary>
+    public string? SemanticLabel { get; set; }
+
     protected ProductAttribute()
     {
         // Required by EF Core
@@ -68,6 +86,16 @@ public class ProductAttribute : FullAuditedEntity<Guid>, IMultiTenant
     public void UpdateDisplayOrder(int displayOrder)
     {
         DisplayOrder = displayOrder;
+    }
+
+    /// <summary>
+    /// Configure embedding behavior for this attribute
+    /// </summary>
+    public void ConfigureEmbedding(bool includeInEmbedding, int priority = 0, string? semanticLabel = null)
+    {
+        IncludeInEmbedding = includeInEmbedding;
+        EmbeddingPriority = priority;
+        SemanticLabel = semanticLabel;
     }
 }
 

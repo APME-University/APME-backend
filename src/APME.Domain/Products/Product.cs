@@ -50,6 +50,33 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
     [ConcurrencyCheck]
     public string StockConcurrencyStamp { get; protected set; } = Guid.NewGuid().ToString("N");
 
+    #region AI/Embedding Support (RAG Architecture)
+
+    /// <summary>
+    /// Canonical, flattened JSON document for AI embedding generation.
+    /// Built from product data + normalized dynamic attributes.
+    /// SRS Reference: AI Chatbot - Canonical Product Document
+    /// </summary>
+    public string? CanonicalDocument { get; private set; }
+
+    /// <summary>
+    /// Schema version of the canonical document for forward compatibility.
+    /// </summary>
+    public int CanonicalDocumentVersion { get; private set; }
+
+    /// <summary>
+    /// Timestamp when the canonical document was last updated.
+    /// </summary>
+    public DateTime? CanonicalDocumentUpdatedAt { get; private set; }
+
+    /// <summary>
+    /// Whether an embedding has been generated for the current canonical document.
+    /// Reset to false when document changes, set to true after embedding generation.
+    /// </summary>
+    public bool EmbeddingGenerated { get; private set; }
+
+    #endregion
+
     protected Product()
     {
         // Required by EF Core
@@ -296,5 +323,56 @@ public class Product : FullAuditedAggregateRoot<Guid>, IMultiTenant
             return new List<string>();
         }
     }
+
+    #region Canonical Document Methods
+
+    /// <summary>
+    /// Updates the canonical document for AI embedding generation.
+    /// Should be called after any product data change that affects embeddings.
+    /// </summary>
+    /// <param name="document">The built canonical document.</param>
+    public void UpdateCanonicalDocument(CanonicalProductDocument document)
+    {
+        if (document == null)
+        {
+            throw new ArgumentNullException(nameof(document));
+        }
+
+        CanonicalDocument = document.ToJson();
+        CanonicalDocumentVersion = document.SchemaVersion;
+        CanonicalDocumentUpdatedAt = DateTime.UtcNow;
+        EmbeddingGenerated = false; // Mark for re-embedding
+    }
+
+    /// <summary>
+    /// Gets the canonical document as a parsed object.
+    /// Returns null if no document exists or parsing fails.
+    /// </summary>
+    public CanonicalProductDocument? GetCanonicalDocument()
+    {
+        return CanonicalProductDocument.FromJson(CanonicalDocument);
+    }
+
+    /// <summary>
+    /// Marks that embedding has been generated for the current canonical document.
+    /// Called by the embedding pipeline after successful embedding generation.
+    /// </summary>
+    public void MarkEmbeddingGenerated()
+    {
+        EmbeddingGenerated = true;
+    }
+
+    /// <summary>
+    /// Checks if the canonical document needs to be regenerated based on schema version.
+    /// </summary>
+    /// <param name="currentSchemaVersion">The current schema version.</param>
+    /// <returns>True if document needs regeneration.</returns>
+    public bool NeedsCanonicalDocumentUpdate(int currentSchemaVersion)
+    {
+        return string.IsNullOrWhiteSpace(CanonicalDocument) || 
+               CanonicalDocumentVersion < currentSchemaVersion;
+    }
+
+    #endregion
 }
 
