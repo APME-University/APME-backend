@@ -24,6 +24,13 @@
     <PackageReference Include="Volo.Abp.BlobStoring.FileSystem" Version="9.3.6" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Core" Version="2.2.5" />
     <PackageReference Include="Stripe.net" Version="45.14.0" />
+    <!-- Hangfire for background job processing (embedding generation) -->
+    <PackageReference Include="Hangfire.Core" Version="1.8.17" />
+    <PackageReference Include="Hangfire.PostgreSql" Version="1.20.10" />
+    <!-- Ollama client for AI embeddings and generation -->
+    <PackageReference Include="OllamaSharp" Version="4.0.13" />
+    <!-- Pgvector for vector embeddings -->
+    <PackageReference Include="Pgvector" Version="0.3.0" />
   </ItemGroup>
 
 </Project>
