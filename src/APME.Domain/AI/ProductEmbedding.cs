@@ -158,3 +158,8 @@ public class ProductEmbedding : Entity<Guid>
 
 
 
+
+
+
+
+

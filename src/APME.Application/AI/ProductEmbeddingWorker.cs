@@ -281,3 +281,8 @@ public class ProductEmbeddingWorker : ITransientDependency
 
 
 
+
+
+
+
+
