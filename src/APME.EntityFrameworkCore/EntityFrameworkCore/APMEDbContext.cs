@@ -21,6 +21,7 @@ using APME.Categories;
 using APME.Products;
 using APME.Carts;
 using APME.Orders;
+using APME.Chat;
 
 namespace APME.EntityFrameworkCore;
 
@@ -52,6 +53,10 @@ public class APMEDbContext :
 
     // AI/RAG entities
     public DbSet<ProductEmbedding> ProductEmbeddings { get; set; }
+
+    // Chat entities
+    public DbSet<ChatSession> ChatSessions { get; set; }
+    public DbSet<ChatMessage> ChatMessages { get; set; }
 
     #region Entities from the modules
 
@@ -119,6 +124,7 @@ public class APMEDbContext :
         ConfigureCarts(builder);
         ConfigureOrders(builder);
         ConfigureProductEmbeddings(builder);
+        ConfigureChat(builder);
     }
 
     private void ConfigureShops(ModelBuilder builder)
@@ -535,6 +541,66 @@ public class APMEDbContext :
                 .HasMethod("hnsw")
                 .HasOperators("vector_cosine_ops")
                 .HasDatabaseName("IX_ProductEmbeddings_Embedding_HNSW");
+        });
+    }
+
+    private void ConfigureChat(ModelBuilder builder)
+    {
+        builder.Entity<ChatSession>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ChatSessions", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.CustomerId).IsRequired();
+            b.Property(x => x.Status).IsRequired();
+            b.Property(x => x.LastActivityAt).IsRequired();
+            b.Property(x => x.Title).HasMaxLength(256);
+            b.Property(x => x.Metadata).HasColumnType("jsonb");
+
+            // Foreign key to Customer
+            b.HasOne<Customer>()
+                .WithMany()
+                .HasForeignKey(x => x.CustomerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.CustomerId);
+            b.HasIndex(x => x.Status);
+            b.HasIndex(x => x.LastActivityAt);
+            b.HasIndex(x => new { x.CustomerId, x.Status });
+            b.HasIndex(x => new { x.CustomerId, x.LastActivityAt });
+        });
+
+        builder.Entity<ChatMessage>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ChatMessages", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.SessionId).IsRequired();
+            b.Property(x => x.SequenceNumber).IsRequired();
+            b.Property(x => x.Role).IsRequired();
+            b.Property(x => x.Content).IsRequired().HasMaxLength(8000);
+            b.Property(x => x.IsArchived).IsRequired().HasDefaultValue(false);
+            b.Property(x => x.Metadata).HasColumnType("jsonb");
+
+            // Foreign key to ChatSession
+            b.HasOne<ChatSession>()
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.SessionId);
+            b.HasIndex(x => x.IsArchived);
+            b.HasIndex(x => x.CreationTime);
+            // Unique constraint: one message per sequence number per session
+            b.HasIndex(x => new { x.SessionId, x.SequenceNumber })
+                .IsUnique()
+                .HasDatabaseName("IX_ChatMessages_SessionId_SequenceNumber");
+            // Index for efficient retrieval of recent messages
+            b.HasIndex(x => new { x.SessionId, x.CreationTime });
+            // Index for archival queries
+            b.HasIndex(x => new { x.IsArchived, x.CreationTime });
         });
     }
 }

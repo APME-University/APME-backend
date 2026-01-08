@@ -17,6 +17,7 @@ using Volo.Abp.SettingManagement.EntityFrameworkCore;
 using Volo.Abp.TenantManagement.EntityFrameworkCore;
 using APME.AI;
 using APME.Carts;
+using APME.Chat;
 using APME.EntityFrameworkCore.AI;
 using APME.Orders;
 
@@ -67,6 +68,8 @@ public class APMEEntityFrameworkCoreModule : AbpModule
             options.AddRepository<Cart, CartRepository>();
             options.AddRepository<Order, OrderRepository>();
             options.AddRepository<ProductEmbedding, ProductEmbeddingRepository>();
+            options.AddRepository<ChatSession, ChatSessionRepository>();
+            options.AddRepository<ChatMessage, ChatMessageRepository>();
         });
 
         Configure<AbpDbContextOptions>(options =>

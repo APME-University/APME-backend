@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -14,6 +15,7 @@ using Volo.Abp.MultiTenancy;
 using Volo.Abp.OpenIddict;
 using Volo.Abp.PermissionManagement.Identity;
 using Volo.Abp.PermissionManagement.OpenIddict;
+using Volo.Abp.Security.Claims;
 using Volo.Abp.SettingManagement;
 using Volo.Abp.TenantManagement;
 
@@ -81,5 +83,23 @@ public class APMEDomainModule : AbpModule
 #if DEBUG
         context.Services.Replace(ServiceDescriptor.Singleton<IEmailSender, NullEmailSender>());
 #endif
+    }
+
+    public override void PostConfigureServices(ServiceConfigurationContext context)
+    {
+        // Replace IdentityDynamicClaimsPrincipalContributor with Customer-aware version
+        // This must happen after all modules have registered their services
+        // This prevents exceptions when Customer GUIDs are looked up in IdentityUser table
+        var descriptorsToRemove = context.Services
+            .Where(d => d.ServiceType == typeof(IAbpClaimsPrincipalContributor) &&
+                       d.ImplementationType?.Name == "IdentityDynamicClaimsPrincipalContributor")
+            .ToList();
+        
+        foreach (var descriptor in descriptorsToRemove)
+        {
+            context.Services.Remove(descriptor);
+        }
+        
+        context.Services.AddTransient<IAbpClaimsPrincipalContributor, CustomerAwareIdentityDynamicClaimsPrincipalContributor>();
     }
 }
