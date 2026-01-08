@@ -5,10 +5,12 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using APME.BlobStorage;
+using APME.Events;
 using APME.Products;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Volo.Abp;
 using Volo.Abp.Application.Services;
 using Volo.Abp.BlobStoring;
@@ -16,6 +18,7 @@ using Volo.Abp.BlobStoring.FileSystem;
 using Volo.Abp.Content;
 using Volo.Abp.Data;
 using Volo.Abp.Domain.Repositories;
+using Volo.Abp.EventBus.Distributed;
 using Volo.Abp.MultiTenancy;
 
 namespace APME.Products;
@@ -28,6 +31,9 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
     private readonly DefaultBlobFilePathCalculator _defaultBlobFilePathCalculator;
     private readonly IBlobContainer<ImageContainer> _container;
     private readonly IRepository<ProductAttribute, Guid> _productAttributeRepository;
+    private readonly ICanonicalDocumentBuilder _canonicalDocumentBuilder;
+    private readonly IDistributedEventBus _distributedEventBus;
+    private readonly ILogger<ProductAppService> _logger;
 
     public ProductAppService(
         IRepository<Product, Guid> repository,
@@ -36,7 +42,10 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         DefaultBlobContainerConfigurationProvider blobContainerConfigurationProvider,
         DefaultBlobFilePathCalculator defaultBlobFilePathCalculator,
         IBlobContainer<ImageContainer> container,
-        IRepository<ProductAttribute, Guid> productAttributeRepository) : base(repository)
+        IRepository<ProductAttribute, Guid> productAttributeRepository,
+        ICanonicalDocumentBuilder canonicalDocumentBuilder,
+        IDistributedEventBus distributedEventBus,
+        ILogger<ProductAppService> logger) : base(repository)
     {
         _blobStorageService = blobStorageService;
         _configuration = configuration;
@@ -44,6 +53,9 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         _defaultBlobFilePathCalculator = defaultBlobFilePathCalculator;
         _container = container;
         _productAttributeRepository = productAttributeRepository;
+        _canonicalDocumentBuilder = canonicalDocumentBuilder;
+        _distributedEventBus = distributedEventBus;
+        _logger = logger;
     }
 
     public override async Task<ProductDto> CreateAsync([FromForm] CreateUpdateProductDto input)
@@ -68,6 +80,16 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         // Insert the new product into the repository
         await Repository.InsertAsync(product, autoSave: true);
         
+        // Build canonical document for AI embeddings (RAG Architecture)
+        await BuildAndSaveCanonicalDocumentAsync(product);
+        
+        // Emit product created event for embedding generation via outbox
+        await EmitProductChangedEventAsync(product, ProductChangeType.Created);
+        
+        _logger.LogInformation(
+            "Product created: {ProductId} ({ProductName}) - Canonical document built, embedding event emitted",
+            product.Id, product.Name);
+        
         // Return the created product DTO
         return MapToGetOutputDto(product);
     }
@@ -87,6 +109,16 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         
         // Update product without touching images
         await Repository.UpdateAsync(product, autoSave: true);
+        
+        // Rebuild canonical document for AI embeddings (RAG Architecture)
+        await BuildAndSaveCanonicalDocumentAsync(product);
+        
+        // Emit product updated event for embedding regeneration via outbox
+        await EmitProductChangedEventAsync(product, ProductChangeType.Updated);
+        
+        _logger.LogInformation(
+            "Product updated: {ProductId} ({ProductName}) - Canonical document rebuilt, embedding event emitted",
+            product.Id, product.Name);
         
         return MapToGetOutputDto(product);
     }
@@ -112,6 +144,14 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         var product = await Repository.GetAsync(id);
         product.Publish();
         await Repository.UpdateAsync(product);
+        
+        // Emit publish event - product now eligible for embedding/search
+        await EmitProductChangedEventAsync(product, ProductChangeType.Published);
+        
+        _logger.LogInformation(
+            "Product published: {ProductId} ({ProductName}) - Now eligible for AI search",
+            product.Id, product.Name);
+        
         return ObjectMapper.Map<Product, ProductDto>(product);
     }
 
@@ -120,6 +160,14 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         var product = await Repository.GetAsync(id);
         product.Unpublish();
         await Repository.UpdateAsync(product);
+        
+        // Emit unpublish event - product removed from search
+        await EmitProductChangedEventAsync(product, ProductChangeType.Unpublished);
+        
+        _logger.LogInformation(
+            "Product unpublished: {ProductId} ({ProductName}) - Removed from AI search",
+            product.Id, product.Name);
+        
         return ObjectMapper.Map<Product, ProductDto>(product);
     }
 
@@ -529,5 +577,70 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         // Return normalized attributes (or null if empty)
         return normalizedAttributes;
     }
+
+    #region AI/Embedding Support (RAG Architecture)
+
+    /// <summary>
+    /// Builds and saves the canonical document for AI embedding generation.
+    /// SRS Reference: AI Chatbot RAG Architecture - Canonical Document Generation
+    /// </summary>
+    private async Task BuildAndSaveCanonicalDocumentAsync(Product product)
+    {
+        try
+        {
+            var canonicalDocument = await _canonicalDocumentBuilder.BuildAsync(product);
+            product.UpdateCanonicalDocument(canonicalDocument);
+            await Repository.UpdateAsync(product, autoSave: true);
+            
+            _logger.LogDebug(
+                "Canonical document built for product {ProductId}, version {Version}",
+                product.Id, canonicalDocument.SchemaVersion);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to build canonical document for product {ProductId}",
+                product.Id);
+            // Don't throw - embedding generation is non-critical for CRUD operations
+        }
+    }
+
+    /// <summary>
+    /// Emits a product changed event via the distributed event bus (outbox pattern).
+    /// This triggers background embedding generation.
+    /// SRS Reference: AI Chatbot RAG Architecture - Transactional Outbox
+    /// </summary>
+    private async Task EmitProductChangedEventAsync(Product product, ProductChangeType changeType)
+    {
+        try
+        {
+            var eventData = new ProductChangedEto
+            {
+                ProductId = product.Id,
+                ShopId = product.ShopId,
+                TenantId = product.TenantId,
+                ProductName = product.Name,
+                ChangeType = changeType,
+                CanonicalDocumentVersion = product.CanonicalDocumentVersion,
+                ChangedAt = DateTime.UtcNow,
+                IsEligibleForEmbedding = product.IsActive && product.IsPublished
+            };
+
+            await _distributedEventBus.PublishAsync(eventData);
+            
+            _logger.LogDebug(
+                "Product changed event emitted: {ProductId}, Type: {ChangeType}, Eligible: {IsEligible}",
+                product.Id, changeType, eventData.IsEligibleForEmbedding);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to emit product changed event for {ProductId}",
+                product.Id);
+            // Don't throw - event emission failure is non-critical for CRUD operations
+        }
+    }
+
+    #endregion
 }
 

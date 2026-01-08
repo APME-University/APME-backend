@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using Pgvector;
 using Volo.Abp.EntityFrameworkCore;
 
 #nullable disable
@@ -22,7 +23,89 @@ namespace APME.Migrations
                 .HasAnnotation("ProductVersion", "9.0.5")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
+            NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("APME.AI.ProductEmbedding", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("CanonicalDocumentVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
+                    b.Property<int>("ChunkIndex")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<string>("ChunkText")
+                        .IsRequired()
+                        .HasMaxLength(8000)
+                        .HasColumnType("character varying(8000)");
+
+                    b.Property<Vector>("Embedding")
+                        .IsRequired()
+                        .HasColumnType("vector(768)");
+
+                    b.Property<string>("EmbeddingModel")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("EmbeddingVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("GeneratedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("PayloadJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ShopId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Embedding")
+                        .HasDatabaseName("IX_ProductEmbeddings_Embedding_HNSW");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Embedding"), "hnsw");
+                    NpgsqlIndexBuilderExtensions.HasOperators(b.HasIndex("Embedding"), new[] { "vector_cosine_ops" });
+
+                    b.HasIndex("IsActive")
+                        .HasDatabaseName("IX_ProductEmbeddings_IsActive");
+
+                    b.HasIndex("ShopId")
+                        .HasDatabaseName("IX_ProductEmbeddings_ShopId");
+
+                    b.HasIndex("TenantId")
+                        .HasDatabaseName("IX_ProductEmbeddings_TenantId");
+
+                    b.HasIndex("IsActive", "TenantId")
+                        .HasDatabaseName("IX_ProductEmbeddings_IsActive_TenantId");
+
+                    b.HasIndex("ProductId", "ChunkIndex")
+                        .IsUnique()
+                        .HasDatabaseName("IX_ProductEmbeddings_ProductId_ChunkIndex");
+
+                    b.ToTable("AppProductEmbeddings", (string)null);
+                });
 
             modelBuilder.Entity("APME.Carts.Cart", b =>
                 {
@@ -237,6 +320,141 @@ namespace APME.Migrations
                         .IsUnique();
 
                     b.ToTable("AppCategories", (string)null);
+                });
+
+            modelBuilder.Entity("APME.Chat.ChatMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ArchivedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasMaxLength(8000)
+                        .HasColumnType("character varying(8000)");
+
+                    b.Property<DateTime>("CreationTime")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("CreationTime");
+
+                    b.Property<Guid?>("CreatorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("CreatorId");
+
+                    b.Property<bool>("IsArchived")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Metadata")
+                        .HasColumnType("jsonb");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SequenceNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreationTime");
+
+                    b.HasIndex("IsArchived");
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("IsArchived", "CreationTime");
+
+                    b.HasIndex("SessionId", "CreationTime");
+
+                    b.HasIndex("SessionId", "SequenceNumber")
+                        .IsUnique()
+                        .HasDatabaseName("IX_ChatMessages_SessionId_SequenceNumber");
+
+                    b.ToTable("AppChatMessages", (string)null);
+                });
+
+            modelBuilder.Entity("APME.Chat.ChatSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ConcurrencyStamp")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("ConcurrencyStamp");
+
+                    b.Property<DateTime>("CreationTime")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("CreationTime");
+
+                    b.Property<Guid?>("CreatorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("CreatorId");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("DeleterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("DeleterId");
+
+                    b.Property<DateTime?>("DeletionTime")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("DeletionTime");
+
+                    b.Property<string>("ExtraProperties")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("ExtraProperties");
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("IsDeleted");
+
+                    b.Property<DateTime>("LastActivityAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<DateTime?>("LastModificationTime")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("LastModificationTime");
+
+                    b.Property<Guid?>("LastModifierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("LastModifierId");
+
+                    b.Property<string>("Metadata")
+                        .HasColumnType("jsonb");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId");
+
+                    b.HasIndex("LastActivityAt");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("CustomerId", "LastActivityAt");
+
+                    b.HasIndex("CustomerId", "Status");
+
+                    b.ToTable("AppChatSessions", (string)null);
                 });
 
             modelBuilder.Entity("APME.Customers.Customer", b =>
@@ -573,6 +791,17 @@ namespace APME.Migrations
                     b.Property<string>("Attributes")
                         .HasColumnType("jsonb");
 
+                    b.Property<string>("CanonicalDocument")
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime?>("CanonicalDocumentUpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<int>("CanonicalDocumentVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<Guid?>("CategoryId")
                         .HasColumnType("uuid");
 
@@ -605,6 +834,11 @@ namespace APME.Migrations
                     b.Property<string>("Description")
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)");
+
+                    b.Property<bool>("EmbeddingGenerated")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<string>("ExtraProperties")
                         .IsRequired()
@@ -695,6 +929,8 @@ namespace APME.Migrations
                     b.HasIndex("TenantId", "Slug")
                         .IsUnique();
 
+                    b.HasIndex("IsActive", "IsPublished", "EmbeddingGenerated");
+
                     b.ToTable("AppProducts", (string)null);
                 });
 
@@ -730,6 +966,16 @@ namespace APME.Migrations
                     b.Property<int>("DisplayOrder")
                         .HasColumnType("integer");
 
+                    b.Property<int>("EmbeddingPriority")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<bool>("IncludeInEmbedding")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
                     b.Property<bool>("IsDeleted")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -752,6 +998,10 @@ namespace APME.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<string>("SemanticLabel")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
                     b.Property<Guid>("ShopId")
                         .HasColumnType("uuid");
 
@@ -766,6 +1016,8 @@ namespace APME.Migrations
                     b.HasIndex("ShopId");
 
                     b.HasIndex("TenantId");
+
+                    b.HasIndex("ShopId", "IncludeInEmbedding");
 
                     b.HasIndex("TenantId", "ShopId", "Name")
                         .IsUnique();
@@ -2667,12 +2919,6 @@ namespace APME.Migrations
                         .HasForeignKey("CartId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.HasOne("APME.Shops.Shop", null)
-                        .WithMany()
-                        .HasForeignKey("ShopId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("APME.Categories.Category", b =>
@@ -2689,6 +2935,24 @@ namespace APME.Migrations
                         .IsRequired();
 
                     b.Navigation("Parent");
+                });
+
+            modelBuilder.Entity("APME.Chat.ChatMessage", b =>
+                {
+                    b.HasOne("APME.Chat.ChatSession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("APME.Chat.ChatSession", b =>
+                {
+                    b.HasOne("APME.Customers.Customer", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("APME.Customers.CustomerUserRole", b =>
@@ -2905,12 +3169,6 @@ namespace APME.Migrations
                         .WithMany("Items")
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("APME.Shops.Shop", null)
-                        .WithMany()
-                        .HasForeignKey("ShopId")
-                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 

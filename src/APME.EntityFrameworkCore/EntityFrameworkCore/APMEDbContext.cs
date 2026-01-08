@@ -14,12 +14,14 @@ using Volo.Abp.SettingManagement.EntityFrameworkCore;
 using Volo.Abp.TenantManagement;
 using Volo.Abp.TenantManagement.EntityFrameworkCore;
 using APME;
+using APME.AI;
 using APME.Shops;
 using APME.Customers;
 using APME.Categories;
 using APME.Products;
 using APME.Carts;
 using APME.Orders;
+using APME.Chat;
 
 namespace APME.EntityFrameworkCore;
 
@@ -48,6 +50,13 @@ public class APMEDbContext :
     // Order entities
     public DbSet<Order> Orders { get; set; }
     public DbSet<OrderItem> OrderItems { get; set; }
+
+    // AI/RAG entities
+    public DbSet<ProductEmbedding> ProductEmbeddings { get; set; }
+
+    // Chat entities
+    public DbSet<ChatSession> ChatSessions { get; set; }
+    public DbSet<ChatMessage> ChatMessages { get; set; }
 
     #region Entities from the modules
 
@@ -98,6 +107,9 @@ public class APMEDbContext :
         builder.ConfigureFeatureManagement();
         builder.ConfigureTenantManagement();
 
+        /* Enable pgvector extension for AI embeddings */
+        builder.HasPostgresExtension("vector");
+
         /* Ignore Value Objects as standalone entities - they are owned types */
         builder.Ignore<PaymentSnapshot>();
         builder.Ignore<Address>();
@@ -111,6 +123,8 @@ public class APMEDbContext :
         ConfigureProductAttributes(builder);
         ConfigureCarts(builder);
         ConfigureOrders(builder);
+        ConfigureProductEmbeddings(builder);
+        ConfigureChat(builder);
     }
 
     private void ConfigureShops(ModelBuilder builder)
@@ -225,6 +239,11 @@ public class APMEDbContext :
             b.Property(x => x.StockConcurrencyStamp).IsRequired().HasMaxLength(40).IsConcurrencyToken();
             b.Property(x => x.LowStockThreshold).HasDefaultValue(10);
 
+            // AI/Embedding support (RAG Architecture)
+            b.Property(x => x.CanonicalDocument).HasColumnType("jsonb");
+            b.Property(x => x.CanonicalDocumentVersion).HasDefaultValue(0);
+            b.Property(x => x.EmbeddingGenerated).HasDefaultValue(false);
+
             // Foreign keys
             b.HasOne<Shop>()
                 .WithMany()
@@ -244,6 +263,8 @@ public class APMEDbContext :
             b.HasIndex(x => x.SKU);
             b.HasIndex(x => new { x.TenantId, x.Slug }).IsUnique();
             b.HasIndex(x => new { x.TenantId, x.SKU }).IsUnique();
+            // Index for finding products that need embedding generation
+            b.HasIndex(x => new { x.IsActive, x.IsPublished, x.EmbeddingGenerated });
         });
     }
 
@@ -256,6 +277,11 @@ public class APMEDbContext :
             b.Property(x => x.Name).IsRequired().HasMaxLength(128);
             b.Property(x => x.DisplayName).IsRequired().HasMaxLength(256);
             b.Property(x => x.DataType).IsRequired();
+            
+            // Embedding control properties for RAG/AI
+            b.Property(x => x.IncludeInEmbedding).HasDefaultValue(true);
+            b.Property(x => x.EmbeddingPriority).HasDefaultValue(0);
+            b.Property(x => x.SemanticLabel).HasMaxLength(256);
 
             // Foreign keys
             b.HasOne<Shop>()
@@ -268,6 +294,8 @@ public class APMEDbContext :
             b.HasIndex(x => x.ShopId);
             b.HasIndex(x => x.Name);
             b.HasIndex(x => new { x.TenantId, x.ShopId, x.Name }).IsUnique();
+            // Index for embedding-included attributes (for efficient filtering)
+            b.HasIndex(x => new { x.ShopId, x.IncludeInEmbedding });
         });
     }
 
@@ -439,6 +467,140 @@ public class APMEDbContext :
             b.HasIndex(x => x.OrderId);
             b.HasIndex(x => x.ShopId);
             b.HasIndex(x => x.ProductId);
+        });
+    }
+
+    /// <summary>
+    /// Configures ProductEmbedding entity for AI/RAG vector storage.
+    /// Uses pgvector extension with HNSW index for efficient similarity search.
+    /// SRS Reference: AI Chatbot - Vector Storage & Indexing
+    /// </summary>
+    private void ConfigureProductEmbeddings(ModelBuilder builder)
+    {
+        builder.Entity<ProductEmbedding>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ProductEmbeddings", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            // Primary key
+            b.HasKey(x => x.Id);
+
+            // Product reference (no FK - products may be deleted, embeddings cleaned up async)
+            b.Property(x => x.ProductId).IsRequired();
+            b.Property(x => x.TenantId);
+            b.Property(x => x.ShopId).IsRequired();
+
+            // Chunk information
+            b.Property(x => x.ChunkIndex).IsRequired().HasDefaultValue(0);
+            b.Property(x => x.ChunkText).IsRequired().HasMaxLength(8000);
+
+            // Vector embedding - using pgvector type
+            // Dimension 768 for embeddinggemma embeddings (adjust if using different model)
+            b.Property(x => x.Embedding)
+                .HasColumnType("vector(768)")
+                .IsRequired();
+
+            // Embedding metadata
+            b.Property(x => x.EmbeddingVersion).IsRequired().HasDefaultValue(1);
+            b.Property(x => x.EmbeddingModel).IsRequired().HasMaxLength(64);
+            b.Property(x => x.CanonicalDocumentVersion).IsRequired().HasDefaultValue(1);
+            b.Property(x => x.GeneratedAt).IsRequired();
+
+            // Payload for quick context retrieval
+            b.Property(x => x.PayloadJson).HasColumnType("jsonb");
+
+            // Active flag for soft filtering
+            b.Property(x => x.IsActive).IsRequired().HasDefaultValue(true);
+
+            // Indexes
+
+            // Unique constraint: one embedding per product per chunk
+            b.HasIndex(x => new { x.ProductId, x.ChunkIndex })
+                .IsUnique()
+                .HasDatabaseName("IX_ProductEmbeddings_ProductId_ChunkIndex");
+
+            // Index for tenant-scoped queries
+            b.HasIndex(x => x.TenantId)
+                .HasDatabaseName("IX_ProductEmbeddings_TenantId");
+
+            // Index for shop-scoped queries
+            b.HasIndex(x => x.ShopId)
+                .HasDatabaseName("IX_ProductEmbeddings_ShopId");
+
+            // Index for active embeddings (filtered search)
+            b.HasIndex(x => x.IsActive)
+                .HasDatabaseName("IX_ProductEmbeddings_IsActive");
+
+            // Composite index for common query pattern
+            b.HasIndex(x => new { x.IsActive, x.TenantId })
+                .HasDatabaseName("IX_ProductEmbeddings_IsActive_TenantId");
+
+            // HNSW index for vector similarity search (cosine distance)
+            // This is the primary index for semantic search
+            b.HasIndex(x => x.Embedding)
+                .HasMethod("hnsw")
+                .HasOperators("vector_cosine_ops")
+                .HasDatabaseName("IX_ProductEmbeddings_Embedding_HNSW");
+        });
+    }
+
+    private void ConfigureChat(ModelBuilder builder)
+    {
+        builder.Entity<ChatSession>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ChatSessions", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.CustomerId).IsRequired();
+            b.Property(x => x.Status).IsRequired();
+            b.Property(x => x.LastActivityAt).IsRequired();
+            b.Property(x => x.Title).HasMaxLength(256);
+            b.Property(x => x.Metadata).HasColumnType("jsonb");
+
+            // Foreign key to Customer
+            b.HasOne<Customer>()
+                .WithMany()
+                .HasForeignKey(x => x.CustomerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.CustomerId);
+            b.HasIndex(x => x.Status);
+            b.HasIndex(x => x.LastActivityAt);
+            b.HasIndex(x => new { x.CustomerId, x.Status });
+            b.HasIndex(x => new { x.CustomerId, x.LastActivityAt });
+        });
+
+        builder.Entity<ChatMessage>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ChatMessages", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.SessionId).IsRequired();
+            b.Property(x => x.SequenceNumber).IsRequired();
+            b.Property(x => x.Role).IsRequired();
+            b.Property(x => x.Content).IsRequired().HasMaxLength(8000);
+            b.Property(x => x.IsArchived).IsRequired().HasDefaultValue(false);
+            b.Property(x => x.Metadata).HasColumnType("jsonb");
+
+            // Foreign key to ChatSession
+            b.HasOne<ChatSession>()
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.SessionId);
+            b.HasIndex(x => x.IsArchived);
+            b.HasIndex(x => x.CreationTime);
+            // Unique constraint: one message per sequence number per session
+            b.HasIndex(x => new { x.SessionId, x.SequenceNumber })
+                .IsUnique()
+                .HasDatabaseName("IX_ChatMessages_SessionId_SequenceNumber");
+            // Index for efficient retrieval of recent messages
+            b.HasIndex(x => new { x.SessionId, x.CreationTime });
+            // Index for archival queries
+            b.HasIndex(x => new { x.IsArchived, x.CreationTime });
         });
     }
 }

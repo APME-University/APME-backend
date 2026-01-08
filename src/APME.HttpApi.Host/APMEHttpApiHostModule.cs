@@ -2,13 +2,21 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using APME.AI;
+using APME.Chat;
 using APME.EntityFrameworkCore;
+using APME.HttpApi.Host.Authentication;
+using APME.HttpApi.Host.Authorization;
+using APME.HttpApi.Host.Hubs;
 using APME.MultiTenancy;
 using Volo.Abp.AspNetCore.Mvc.UI.Theme.LeptonXLite;
 using Volo.Abp.AspNetCore.Mvc.UI.Theme.LeptonXLite.Bundling;
@@ -32,6 +40,8 @@ using Volo.Abp.VirtualFileSystem;
 using Volo.Abp.BlobStoring;
 using Volo.Abp.BlobStoring.FileSystem;
 using APME.BlobStorage;
+using Hangfire;
+using Hangfire.PostgreSql;
 
 namespace APME;
 
@@ -68,6 +78,7 @@ public class APMEHttpApiHostModule : AbpModule
         var hostingEnvironment = context.Services.GetHostingEnvironment();
 
         ConfigureAuthentication(context);
+        ConfigureCustomerSignalRAuthentication(context);
         ConfigureBundles();
         ConfigureUrls(configuration);
         ConfigureConventionalControllers();
@@ -75,6 +86,9 @@ public class APMEHttpApiHostModule : AbpModule
         ConfigureCors(context, configuration);
         ConfigureSwaggerServices(context, configuration);
         ConfigureBlobStorage(context, hostingEnvironment);
+        ConfigureHangfire(context, configuration);
+        ConfigureAI(context, configuration);
+        ConfigureSignalR(context, configuration);
     }
 
     private void ConfigureAuthentication(ServiceConfigurationContext context)
@@ -83,6 +97,36 @@ public class APMEHttpApiHostModule : AbpModule
         context.Services.Configure<AbpClaimsPrincipalFactoryOptions>(options =>
         {
             options.IsDynamicClaimsEnabled = true;
+        });
+    }
+
+    /// <summary>
+    /// Configures Customer SignalR authentication and authorization.
+    /// This bypasses ABP's IdentityUser resolution for SignalR connections.
+    /// </summary>
+    private void ConfigureCustomerSignalRAuthentication(ServiceConfigurationContext context)
+    {
+        // Register Customer SignalR authentication handler
+        context.Services.AddAuthentication()
+            .AddScheme<CustomerSignalRAuthenticationOptions, CustomerSignalRAuthenticationHandler>(
+                "CustomerSignalR",
+                options =>
+                {
+                    options.Audience = "APME";
+                    options.ValidateCustomer = true;
+                });
+
+        // Register authorization handler and requirement
+        context.Services.AddSingleton<IAuthorizationHandler, CustomerSignalRAuthorizationHandler>();
+
+        // Configure authorization policy
+        context.Services.AddAuthorization(options =>
+        {
+            options.AddPolicy("CustomerSignalR", policy =>
+            {
+                policy.AuthenticationSchemes.Add("CustomerSignalR");
+                policy.Requirements.Add(new CustomerSignalRRequirement());
+            });
         });
     }
 
@@ -200,6 +244,64 @@ public class APMEHttpApiHostModule : AbpModule
         });
     }
 
+    /// <summary>
+    /// Configures Hangfire for background job processing.
+    /// SRS Reference: AI Chatbot RAG Architecture - Background Processing
+    /// </summary>
+    private void ConfigureHangfire(ServiceConfigurationContext context, IConfiguration configuration)
+    {
+        var connectionString = configuration.GetConnectionString("Default");
+
+        context.Services.AddHangfire(config =>
+        {
+            config.SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+                .UseSimpleAssemblyNameTypeSerializer()
+                .UseRecommendedSerializerSettings()
+                .UsePostgreSqlStorage(options =>
+                {
+                    options.UseNpgsqlConnection(connectionString);
+                });
+        });
+
+        // Add Hangfire server with worker configuration
+        var workerCount = configuration.GetValue<int>("Hangfire:WorkerCount", 2);
+        context.Services.AddHangfireServer(options =>
+        {
+            options.WorkerCount = workerCount;
+            options.Queues = new[] { "default", "embeddings" };
+        });
+    }
+
+    /// <summary>
+    /// Configures AI services (Ollama, embeddings, chat).
+    /// SRS Reference: AI Chatbot RAG Architecture - Configuration
+    /// </summary>
+    private void ConfigureAI(ServiceConfigurationContext context, IConfiguration configuration)
+    {
+        // Configure AI options from appsettings
+        context.Services.Configure<AIOptions>(
+            configuration.GetSection(AIOptions.SectionName));
+    }
+
+    /// <summary>
+    /// Configures SignalR for real-time chat communication.
+    /// </summary>
+    private void ConfigureSignalR(ServiceConfigurationContext context, IConfiguration configuration)
+    {
+        // Add SignalR services
+        context.Services.AddSignalR(options =>
+        {
+            options.EnableDetailedErrors = context.Services.GetHostingEnvironment().IsDevelopment();
+            options.ClientTimeoutInterval = TimeSpan.FromMinutes(2);
+            options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+        })
+        .AddJsonProtocol(); // Ensure JSON protocol is used
+
+        // Configure Chat options
+        context.Services.Configure<ChatOptions>(
+            configuration.GetSection(ChatOptions.SectionName));
+    }
+
     public override void OnApplicationInitialization(ApplicationInitializationContext context)
     {
         var app = context.GetApplicationBuilder();
@@ -242,8 +344,25 @@ public class APMEHttpApiHostModule : AbpModule
             c.OAuthScopes("APME");
         });
 
+        // Hangfire dashboard for monitoring background jobs
+        var dashboardPath = context.ServiceProvider
+            .GetRequiredService<IConfiguration>()
+            .GetValue<string>("Hangfire:DashboardPath", "/hangfire");
+        
+        app.UseHangfireDashboard(dashboardPath, new DashboardOptions
+        {
+            // In production, add authorization filter
+            // Authorization = new[] { new HangfireAuthorizationFilter() }
+        });
+
         app.UseAuditing();
         app.UseAbpSerilogEnrichers();
-        app.UseConfiguredEndpoints();
+        
+        app.UseConfiguredEndpoints(endpoints =>
+        {
+            // Map SignalR hub with Customer-specific authorization policy
+            // This bypasses ABP's dynamic claims resolution for SignalR connections
+            endpoints.MapHub<ChatHub>("/hubs/chat").RequireAuthorization("CustomerSignalR");
+        });
     }
 }

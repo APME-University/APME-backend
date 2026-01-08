@@ -3,6 +3,7 @@ using System.IO;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Configuration;
+using Npgsql;
 
 namespace APME.EntityFrameworkCore;
 
@@ -18,9 +19,18 @@ public class APMEDbContextFactory : IDesignTimeDbContextFactory<APMEDbContext>
         APMEEfCoreEntityExtensionMappings.Configure();
 
         var configuration = BuildConfiguration();
+        var connectionString = configuration.GetConnectionString("Default");
+
+        // Configure NpgsqlDataSource with pgvector support
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        dataSourceBuilder.UseVector();
+        var dataSource = dataSourceBuilder.Build();
 
         var builder = new DbContextOptionsBuilder<APMEDbContext>()
-            .UseNpgsql(configuration.GetConnectionString("Default"));
+            .UseNpgsql(dataSource, npgsqlOptions =>
+            {
+                npgsqlOptions.UseVector();
+            });
 
         return new APMEDbContext(builder.Options);
     }
