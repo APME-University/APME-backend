@@ -4,11 +4,15 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using APME.AI;
+using APME.BlobStorage;
+using APME.Products;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Volo.Abp.Data;
 using Volo.Abp.Domain.Repositories;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.Guids;
+using Volo.Abp.MultiTenancy;
 
 namespace APME.Chat;
 
@@ -23,6 +27,9 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
     private readonly IChatContextBuilder _contextBuilder;
     private readonly ISemanticSearchService _semanticSearchService;
     private readonly IAIChatService _aiChatService;
+    private readonly IRepository<Product, Guid> _productRepository;
+    private readonly IImageUrlProvider _imageUrlProvider;
+    private readonly IDataFilter _dataFilter;
     private readonly IGuidGenerator _guidGenerator;
     private readonly ChatOptions _options;
     private readonly ILogger<ChatOrchestratorService> _logger;
@@ -33,6 +40,9 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
         IChatContextBuilder contextBuilder,
         ISemanticSearchService semanticSearchService,
         IAIChatService aiChatService,
+        IRepository<Product, Guid> productRepository,
+        IImageUrlProvider imageUrlProvider,
+        IDataFilter dataFilter,
         IGuidGenerator guidGenerator,
         IOptions<ChatOptions> options,
         ILogger<ChatOrchestratorService> logger)
@@ -42,12 +52,15 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
         _contextBuilder = contextBuilder;
         _semanticSearchService = semanticSearchService;
         _aiChatService = aiChatService;
+        _productRepository = productRepository;
+        _imageUrlProvider = imageUrlProvider;
+        _dataFilter = dataFilter;
         _guidGenerator = guidGenerator;
         _options = options.Value;
         _logger = logger;
     }
 
-    public async Task<string> ProcessMessageAsync(
+    public async Task<ProcessMessageResult> ProcessMessageAsync(
         Guid sessionId,
         Guid customerId,
         string message,
@@ -94,7 +107,10 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
             shopId: null,
             cancellationToken);
 
-        context.ContextProducts = contextProducts;
+        // Enrich products with image URLs and slugs
+        var enrichedProducts = await EnrichProductDataAsync(contextProducts, cancellationToken);
+
+        context.ContextProducts = enrichedProducts;
 
         // Build chat request
         var chatMessages = _contextBuilder.ToChatMessages(context);
@@ -143,12 +159,12 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
             assistantContent);
 
         // Store metadata about context products
-        if (contextProducts.Count > 0)
+        if (enrichedProducts.Count > 0)
         {
             var metadata = System.Text.Json.JsonSerializer.Serialize(new
             {
-                ContextProductIds = contextProducts.Select(p => p.ProductId).ToList(),
-                ContextProductCount = contextProducts.Count
+                ContextProductIds = enrichedProducts.Select(p => p.ProductId).ToList(),
+                ContextProductCount = enrichedProducts.Count
             });
             assistantMessage.SetMetadata(metadata);
         }
@@ -160,7 +176,55 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
             sessionId,
             assistantContent.Length);
 
-        return assistantContent;
+        return new ProcessMessageResult
+        {
+            Response = assistantContent,
+            ContextProducts = enrichedProducts
+        };
+    }
+
+    /// <summary>
+    /// Enriches search results with authoritative product data from the relational database.
+    /// </summary>
+    private async Task<List<ProductSearchResult>> EnrichProductDataAsync(
+        List<ProductSearchResult> searchResults,
+        CancellationToken cancellationToken)
+    {
+        if (searchResults.Count == 0)
+        {
+            return searchResults;
+        }
+
+        var productIds = searchResults.Select(r => r.ProductId).ToList();
+
+        // Fetch products from relational DB (disable tenant filter for cross-tenant access)
+        using (_dataFilter.Disable<IMultiTenant>())
+        {
+            var products = await _productRepository.GetListAsync(
+                p => productIds.Contains(p.Id),
+                cancellationToken: cancellationToken);
+
+            var productLookup = products.ToDictionary(p => p.Id);
+
+            // Enrich search results with latest product data
+            foreach (var result in searchResults)
+            {
+                if (productLookup.TryGetValue(result.ProductId, out var product))
+                {
+                    result.ProductName = product.Name;
+                    result.Price = product.Price;
+                    result.IsInStock = product.IsInStock();
+                    result.IsOnSale = product.IsOnSale();
+                    result.SKU = product.SKU;
+                    result.Slug = product.Slug;
+                    
+                    // Convert blob name to full image URL
+                    result.ImageUrl = _imageUrlProvider.GetFullImageUrl(product.PrimaryImageUrl);
+                }
+            }
+        }
+
+        return searchResults;
     }
 
     public async Task<ChatSessionDto> GetOrCreateSessionAsync(

@@ -44,6 +44,8 @@ public class ProductSearchResultDto
     public string? ShopName { get; set; }
     public string? MatchedSnippet { get; set; }
     public double RelevanceScore { get; set; }
+    public string? ImageUrl { get; set; }
+    public string? Slug { get; set; }
 }
 
 /// <summary>

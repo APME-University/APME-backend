@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Security.Claims;
 using System.Threading;
@@ -192,7 +193,7 @@ public class ChatHub : Hub
         try
         {
             // Stream tokens as they arrive
-            var fullResponse = await _orchestrator.ProcessMessageAsync(
+            var result = await _orchestrator.ProcessMessageAsync(
                 sessionGuid,
                 customerId,
                 message,
@@ -202,19 +203,24 @@ public class ChatHub : Hub
                 },
                 CancellationToken.None);
 
+            // Map context products to DTOs
+            var contextProductDtos = result.ContextProducts?.Select(MapToDto).ToList() ?? new List<ProductSearchResultDto>();
+
             // Send completion notification
             await Clients.Caller.SendAsync("MessageComplete", new ChatMessageResponseDto
             {
                 SessionId = sessionId,
                 Role = ChatMessageRole.Assistant,
-                Content = fullResponse,
-                CreatedAt = DateTime.UtcNow
+                Content = result.Response,
+                CreatedAt = DateTime.UtcNow,
+                ContextProducts = contextProductDtos
             });
 
             _logger.LogInformation(
-                "Message processed for session {SessionId}, response length: {Length}",
+                "Message processed for session {SessionId}, response length: {Length}, products: {ProductCount}",
                 sessionId,
-                fullResponse.Length);
+                result.Response.Length,
+                contextProductDtos.Count);
         }
         catch (Exception ex)
         {
@@ -321,6 +327,27 @@ public class ChatHub : Hub
         }
 
         throw new UnauthorizedAccessException("Customer ID not found in claims");
+    }
+
+    /// <summary>
+    /// Maps ProductSearchResult to ProductSearchResultDto.
+    /// </summary>
+    private static ProductSearchResultDto MapToDto(APME.AI.ProductSearchResult result)
+    {
+        return new ProductSearchResultDto
+        {
+            ProductId = result.ProductId,
+            ProductName = result.ProductName,
+            Price = result.Price,
+            IsInStock = result.IsInStock,
+            IsOnSale = result.IsOnSale,
+            CategoryName = result.CategoryName,
+            ShopName = result.ShopName,
+            MatchedSnippet = result.MatchedSnippet,
+            RelevanceScore = result.RelevanceScore,
+            ImageUrl = result.ImageUrl,
+            Slug = result.Slug
+        };
     }
 }
 

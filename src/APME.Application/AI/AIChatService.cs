@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using APME.BlobStorage;
 using APME.Products;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -26,6 +27,7 @@ public class AIChatService : IAIChatService, ITransientDependency
 {
     private readonly ISemanticSearchService _semanticSearchService;
     private readonly IRepository<Product, Guid> _productRepository;
+    private readonly IImageUrlProvider _imageUrlProvider;
     private readonly OllamaApiClient _ollamaClient;
     private readonly AIOptions _options;
     private readonly IDataFilter _dataFilter;
@@ -47,12 +49,14 @@ Current product context is provided below. Use this information to answer custom
     public AIChatService(
         ISemanticSearchService semanticSearchService,
         IRepository<Product, Guid> productRepository,
+        IImageUrlProvider imageUrlProvider,
         IOptions<AIOptions> options,
         IDataFilter dataFilter,
         ILogger<AIChatService> logger)
     {
         _semanticSearchService = semanticSearchService;
         _productRepository = productRepository;
+        _imageUrlProvider = imageUrlProvider;
         _options = options.Value;
         _dataFilter = dataFilter;
         _logger = logger;
@@ -200,6 +204,10 @@ Current product context is provided below. Use this information to answer custom
                     result.IsInStock = product.IsInStock();
                     result.IsOnSale = product.IsOnSale();
                     result.SKU = product.SKU;
+                    result.Slug = product.Slug;
+                    
+                    // Convert blob name to full image URL
+                    result.ImageUrl = _imageUrlProvider.GetFullImageUrl(product.PrimaryImageUrl);
                 }
             }
         }

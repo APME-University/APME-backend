@@ -45,19 +45,23 @@ public class CustomerSignalRAuthenticationHandler : AuthenticationHandler<Custom
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        // Get token from Authorization header
-        if (!Request.Headers.TryGetValue("Authorization", out var authHeader))
+        string? token = null;
+
+        // Try to get token from Authorization header first
+        if (Request.Headers.TryGetValue("Authorization", out var authHeader))
         {
-            return AuthenticateResult.NoResult();
+            var authHeaderValue = authHeader.ToString();
+            if (!string.IsNullOrWhiteSpace(authHeaderValue) && authHeaderValue.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                token = authHeaderValue.Substring("Bearer ".Length).Trim();
+            }
         }
 
-        var authHeaderValue = authHeader.ToString();
-        if (string.IsNullOrWhiteSpace(authHeaderValue) || !authHeaderValue.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        // If not in header, try query string (SignalR negotiation uses query string)
+        if (string.IsNullOrWhiteSpace(token) && Request.Query.TryGetValue("access_token", out var accessToken))
         {
-            return AuthenticateResult.NoResult();
+            token = accessToken.ToString();
         }
-
-        var token = authHeaderValue.Substring("Bearer ".Length).Trim();
 
         if (string.IsNullOrWhiteSpace(token))
         {

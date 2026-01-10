@@ -100,6 +100,16 @@ public class ProductSearchResult
     /// Snippet of the matched text (for highlighting).
     /// </summary>
     public string? MatchedSnippet { get; set; }
+
+    /// <summary>
+    /// Product image URL.
+    /// </summary>
+    public string? ImageUrl { get; set; }
+
+    /// <summary>
+    /// Product slug for URL routing.
+    /// </summary>
+    public string? Slug { get; set; }
 }
 
 

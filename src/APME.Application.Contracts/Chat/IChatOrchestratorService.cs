@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using APME.AI;
 using Volo.Abp.Application.Services;
 
 namespace APME.Chat;
@@ -21,8 +22,8 @@ public interface IChatOrchestratorService : IApplicationService
     /// <param name="message">User message</param>
     /// <param name="onToken">Callback for each token streamed</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Complete assistant message</returns>
-    Task<string> ProcessMessageAsync(
+    /// <returns>Result containing the complete assistant message and context products</returns>
+    Task<ProcessMessageResult> ProcessMessageAsync(
         Guid sessionId,
         Guid customerId,
         string message,
@@ -70,6 +71,22 @@ public interface IChatOrchestratorService : IApplicationService
         int skipCount = 0,
         int maxResultCount = 50,
         CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Result of processing a chat message.
+/// </summary>
+public class ProcessMessageResult
+{
+    /// <summary>
+    /// The complete assistant response text.
+    /// </summary>
+    public string Response { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The enriched context products used for the response.
+    /// </summary>
+    public List<ProductSearchResult> ContextProducts { get; set; } = new();
 }
 
 

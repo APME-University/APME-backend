@@ -144,15 +144,32 @@ public class APMEHttpApiHostModule : AbpModule
         });
     }
 
+    //private void ConfigureUrls(IConfiguration configuration)
+    //{
+    //    Configure<AppUrlOptions>(options =>
+    //    {
+    //        options.Applications["MVC"].RootUrl = configuration["App:SelfUrl"];
+    //        options.RedirectAllowedUrls.AddRange(configuration["App:RedirectAllowedUrls"]?.Split(',') ?? Array.Empty<string>());
+
+    //        options.Applications["Angular"].RootUrl = configuration["App:ClientUrl"];
+    //        options.Applications["Angular"].Urls[AccountUrlNames.PasswordReset] = "account/reset-password";
+    //    });
+    //}
     private void ConfigureUrls(IConfiguration configuration)
     {
         Configure<AppUrlOptions>(options =>
         {
             options.Applications["MVC"].RootUrl = configuration["App:SelfUrl"];
-            options.RedirectAllowedUrls.AddRange(configuration["App:RedirectAllowedUrls"]?.Split(',') ?? Array.Empty<string>());
+
+            options.RedirectAllowedUrls.AddRange(
+                configuration["App:RedirectAllowedUrls"]?
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    ?? Array.Empty<string>()
+            );
 
             options.Applications["Angular"].RootUrl = configuration["App:ClientUrl"];
-            options.Applications["Angular"].Urls[AccountUrlNames.PasswordReset] = "account/reset-password";
+            options.Applications["Angular"].Urls[AccountUrlNames.PasswordReset]
+                = "account/reset-password";
         });
     }
 

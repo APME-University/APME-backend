@@ -7,6 +7,7 @@ using APME.Customers;
 using APME.Products;
 using APME.Shops;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Volo.Abp;
 using Volo.Abp.Application.Services;
 using Volo.Abp.Data;
@@ -222,6 +223,7 @@ public class CartAppService : ApplicationService, ICartAppService
     }
 
     /// <inheritdoc />
+    [HttpDelete("clear")]
     public async Task<CartViewDto> ClearCartAsync()
     {
         var customerId = await GetCurrentCustomerIdAsync();

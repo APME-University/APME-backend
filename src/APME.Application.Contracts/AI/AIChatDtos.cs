@@ -182,6 +182,16 @@ public class ProductSearchResultDto
     /// Matched text snippet.
     /// </summary>
     public string? MatchedSnippet { get; set; }
+
+    /// <summary>
+    /// Product image URL.
+    /// </summary>
+    public string? ImageUrl { get; set; }
+
+    /// <summary>
+    /// Product slug for URL routing.
+    /// </summary>
+    public string? Slug { get; set; }
 }
 
 /// <summary>
