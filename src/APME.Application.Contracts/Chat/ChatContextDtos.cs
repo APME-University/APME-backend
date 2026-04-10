@@ -59,7 +59,3 @@ public class ChatMessageDto
     public DateTime CreatedAt { get; set; }
     public string? Metadata { get; set; }
 }
-
-
-
-

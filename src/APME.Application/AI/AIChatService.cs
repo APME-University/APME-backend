@@ -10,7 +10,6 @@ using APME.BlobStorage;
 using APME.Products;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using OllamaSharp;
 using Volo.Abp.Data;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.Domain.Repositories;
@@ -20,15 +19,15 @@ namespace APME.AI;
 
 /// <summary>
 /// Implementation of AI chat service using RAG (Retrieval-Augmented Generation).
-/// Uses semantic search to find relevant products and Ollama for response generation.
+/// Uses semantic search to find relevant products and ILlmProvider for response generation.
 /// SRS Reference: AI Chatbot RAG Architecture - Chat Service
 /// </summary>
 public class AIChatService : IAIChatService, ITransientDependency
 {
     private readonly ISemanticSearchService _semanticSearchService;
+    private readonly ILlmProvider _llmProvider;
     private readonly IRepository<Product, Guid> _productRepository;
     private readonly IImageUrlProvider _imageUrlProvider;
-    private readonly OllamaApiClient _ollamaClient;
     private readonly AIOptions _options;
     private readonly IDataFilter _dataFilter;
     private readonly ILogger<AIChatService> _logger;
@@ -48,6 +47,7 @@ Current product context is provided below. Use this information to answer custom
 
     public AIChatService(
         ISemanticSearchService semanticSearchService,
+        ILlmProvider llmProvider,
         IRepository<Product, Guid> productRepository,
         IImageUrlProvider imageUrlProvider,
         IOptions<AIOptions> options,
@@ -55,16 +55,12 @@ Current product context is provided below. Use this information to answer custom
         ILogger<AIChatService> logger)
     {
         _semanticSearchService = semanticSearchService;
+        _llmProvider = llmProvider;
         _productRepository = productRepository;
         _imageUrlProvider = imageUrlProvider;
         _options = options.Value;
         _dataFilter = dataFilter;
         _logger = logger;
-
-        // Initialize Ollama client for generation
-        var uri = new Uri(_options.OllamaBaseUrl);
-        _ollamaClient = new OllamaApiClient(uri);
-        _ollamaClient.SelectedModel = _options.GenerationModel;
     }
 
     /// <inheritdoc />
@@ -80,7 +76,6 @@ Current product context is provided below. Use this information to answer custom
 
         try
         {
-            // Step 1: Retrieve relevant products using semantic search
             var contextProducts = await _semanticSearchService.SearchAsync(
                 request.Message,
                 request.ContextProductCount,
@@ -92,23 +87,29 @@ Current product context is provided below. Use this information to answer custom
                 "Found {Count} relevant products for context",
                 contextProducts.Count);
 
-            // Step 2: Fetch authoritative product data from relational DB
             var enrichedProducts = await EnrichProductDataAsync(contextProducts, cancellationToken);
-
-            // Step 3: Build prompt with context
             var prompt = BuildPrompt(request, enrichedProducts);
+            var generationRequest = BuildGenerationRequest(prompt, request.ConversationHistory);
 
-            // Step 4: Generate response using Ollama
-            var response = await GenerateResponseAsync(prompt, request.ConversationHistory, cancellationToken);
+            var generationResponse = await _llmProvider.GenerateResponseAsync(
+                generationRequest,
+                cancellationToken);
 
             stopwatch.Stop();
 
             var chatResponse = new ChatResponse
             {
-                Response = response,
+                Response = generationResponse.Content,
                 ContextProducts = enrichedProducts,
                 GenerationTimeMs = stopwatch.ElapsedMilliseconds,
-                SessionId = request.SessionId ?? Guid.NewGuid().ToString()
+                SessionId = request.SessionId ?? Guid.NewGuid().ToString(),
+                TokenUsage = generationResponse.TokenUsage != null 
+                    ? new TokenUsage
+                    {
+                        PromptTokens = generationResponse.TokenUsage.PromptTokens,
+                        CompletionTokens = generationResponse.TokenUsage.CompletionTokens
+                    }
+                    : null
             };
 
             _logger.LogInformation(
@@ -127,47 +128,42 @@ Current product context is provided below. Use this information to answer custom
     /// <inheritdoc />
     public async IAsyncEnumerable<string> ChatStreamAsync(
         ChatRequest request,
+        List<ProductSearchResult>? preSearchedProducts = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _logger.LogInformation(
             "Processing streaming chat request: '{Message}'",
             TruncateForLog(request.Message));
 
-        // Step 1: Retrieve relevant products
-        var contextProducts = await _semanticSearchService.SearchAsync(
-            request.Message,
-            request.ContextProductCount,
-            request.TenantId,
-            request.ShopId,
-            cancellationToken);
-
-        // Step 2: Enrich with authoritative data
-        var enrichedProducts = await EnrichProductDataAsync(contextProducts, cancellationToken);
-
-        // Step 3: Build prompt
-        var prompt = BuildPrompt(request, enrichedProducts);
-
-        // Step 4: Build messages for Ollama
-        var messages = BuildChatMessages(prompt, request.ConversationHistory);
-
-        // Step 5: Stream response
-        await foreach (var token in _ollamaClient.ChatAsync(
-            new OllamaSharp.Models.Chat.ChatRequest
-            {
-                Model = _options.GenerationModel,
-                Messages = messages,
-                Options = new OllamaSharp.Models.RequestOptions
-                {
-                    Temperature = _options.GenerationTemperature,
-                    NumPredict = _options.MaxGenerationTokens
-                },
-                Stream = true
-            }, cancellationToken))
+        List<ProductSearchResult> contextProducts;
+        
+        // Use pre-searched products if provided, otherwise search again
+        if (preSearchedProducts != null && preSearchedProducts.Count > 0)
         {
-            if (!string.IsNullOrEmpty(token?.Message?.Content))
-            {
-                yield return token.Message.Content;
-            }
+            _logger.LogDebug("Using {Count} pre-searched products for context", preSearchedProducts.Count);
+            contextProducts = preSearchedProducts;
+        }
+        else
+        {
+            contextProducts = await _semanticSearchService.SearchAsync(
+                request.Message,
+                request.ContextProductCount,
+                request.TenantId,
+                request.ShopId,
+                cancellationToken);
+        }
+
+        // Note: Products should already be enriched if passed from orchestrator
+        // But we enrich again here to ensure they have all required fields
+        var enrichedProducts = await EnrichProductDataAsync(contextProducts, cancellationToken);
+        var prompt = BuildPrompt(request, enrichedProducts);
+        var generationRequest = BuildGenerationRequest(prompt, request.ConversationHistory);
+
+        await foreach (var token in _llmProvider.GenerateStreamingResponseAsync(
+            generationRequest,
+            cancellationToken))
+        {
+            yield return token;
         }
     }
 
@@ -185,7 +181,6 @@ Current product context is provided below. Use this information to answer custom
 
         var productIds = searchResults.Select(r => r.ProductId).ToList();
 
-        // Fetch products from relational DB (disable tenant filter for cross-tenant access)
         using (_dataFilter.Disable<IMultiTenant>())
         {
             var products = await _productRepository.GetListAsync(
@@ -194,7 +189,6 @@ Current product context is provided below. Use this information to answer custom
 
             var productLookup = products.ToDictionary(p => p.Id);
 
-            // Enrich search results with latest product data
             foreach (var result in searchResults)
             {
                 if (productLookup.TryGetValue(result.ProductId, out var product))
@@ -205,8 +199,6 @@ Current product context is provided below. Use this information to answer custom
                     result.IsOnSale = product.IsOnSale();
                     result.SKU = product.SKU;
                     result.Slug = product.Slug;
-                    
-                    // Convert blob name to full image URL
                     result.ImageUrl = _imageUrlProvider.GetFullImageUrl(product.PrimaryImageUrl);
                 }
             }
@@ -235,22 +227,22 @@ Current product context is provided below. Use this information to answer custom
                 sb.AppendLine($"- Price: ${product.Price:F2}");
                 sb.AppendLine($"- In Stock: {(product.IsInStock ? "Yes" : "No")}");
                 sb.AppendLine($"- On Sale: {(product.IsOnSale ? "Yes" : "No")}");
-                
+
                 if (!string.IsNullOrWhiteSpace(product.CategoryName))
                 {
                     sb.AppendLine($"- Category: {product.CategoryName}");
                 }
-                
+
                 if (!string.IsNullOrWhiteSpace(product.ShopName))
                 {
                     sb.AppendLine($"- Shop: {product.ShopName}");
                 }
-                
+
                 if (!string.IsNullOrWhiteSpace(product.MatchedSnippet))
                 {
                     sb.AppendLine($"- Details: {product.MatchedSnippet}");
                 }
-                
+
                 sb.AppendLine();
             }
 
@@ -269,75 +261,41 @@ Current product context is provided below. Use this information to answer custom
     }
 
     /// <summary>
-    /// Generates a response using Ollama.
+    /// Builds a GenerationRequest from conversation history and prompt.
     /// </summary>
-    private async Task<string> GenerateResponseAsync(
-        string prompt,
-        List<ChatMessage>? conversationHistory,
-        CancellationToken cancellationToken)
-    {
-        var messages = BuildChatMessages(prompt, conversationHistory);
-
-        var response = new StringBuilder();
-
-        await foreach (var token in _ollamaClient.ChatAsync(
-            new OllamaSharp.Models.Chat.ChatRequest
-            {
-                Model = _options.GenerationModel,
-                Messages = messages,
-                Options = new OllamaSharp.Models.RequestOptions
-                {
-                    Temperature = _options.GenerationTemperature,
-                    NumPredict = _options.MaxGenerationTokens
-                },
-                Stream = true
-            }, cancellationToken))
-        {
-            if (!string.IsNullOrEmpty(token?.Message?.Content))
-            {
-                response.Append(token.Message.Content);
-            }
-        }
-
-        return response.ToString();
-    }
-
-    /// <summary>
-    /// Builds chat messages for Ollama including conversation history.
-    /// </summary>
-    private List<OllamaSharp.Models.Chat.Message> BuildChatMessages(
+    private GenerationRequest BuildGenerationRequest(
         string currentPrompt,
         List<ChatMessage>? conversationHistory)
     {
-        var messages = new List<OllamaSharp.Models.Chat.Message>();
+        var messages = new List<GenerationMessage>();
 
-        // Add conversation history if provided
         if (conversationHistory != null)
         {
-            foreach (var msg in conversationHistory.TakeLast(10)) // Limit history
+            foreach (var msg in conversationHistory.TakeLast(10))
             {
-                messages.Add(new OllamaSharp.Models.Chat.Message
+                messages.Add(new GenerationMessage
                 {
-                    Role = msg.Role switch
-                    {
-                        "user" => OllamaSharp.Models.Chat.ChatRole.User,
-                        "assistant" => OllamaSharp.Models.Chat.ChatRole.Assistant,
-                        "system" => OllamaSharp.Models.Chat.ChatRole.System,
-                        _ => OllamaSharp.Models.Chat.ChatRole.User
-                    },
-                    Content = msg.Content
+                    Role = msg.Role,
+                    Content = msg.Content,
+                    Timestamp = msg.Timestamp
                 });
             }
         }
 
-        // Add current prompt as user message
-        messages.Add(new OllamaSharp.Models.Chat.Message
+        messages.Add(new GenerationMessage
         {
-            Role = OllamaSharp.Models.Chat.ChatRole.User,
-            Content = currentPrompt
+            Role = "user",
+            Content = currentPrompt,
+            Timestamp = DateTime.UtcNow
         });
 
-        return messages;
+        return new GenerationRequest
+        {
+            Messages = messages,
+            Temperature = _options.GenerationTemperature,
+            MaxTokens = _options.MaxGenerationTokens,
+            Stream = true
+        };
     }
 
     /// <summary>
@@ -352,12 +310,3 @@ Current product context is provided below. Use this information to answer custom
         return text.Substring(0, maxLength) + "...";
     }
 }
-
-
-
-
-
-
-
-
-

@@ -6,6 +6,7 @@ using APME.Shops;
 using APME.Customers;
 using APME.Categories;
 using APME.Products;
+using APME.Dashboard;
 
 namespace APME;
 

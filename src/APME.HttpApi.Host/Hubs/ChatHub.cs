@@ -206,6 +206,17 @@ public class ChatHub : Hub
             // Map context products to DTOs
             var contextProductDtos = result.ContextProducts?.Select(MapToDto).ToList() ?? new List<ProductSearchResultDto>();
 
+            // Log product details for debugging
+            if (contextProductDtos.Count > 0)
+            {
+                _logger.LogDebug(
+                    "Mapping {Count} products. Sample product: Id={ProductId}, Name={Name}, ImageUrl={ImageUrl}",
+                    contextProductDtos.Count,
+                    contextProductDtos.First().ProductId,
+                    contextProductDtos.First().ProductName,
+                    contextProductDtos.First().ImageUrl ?? "null");
+            }
+
             // Send completion notification
             await Clients.Caller.SendAsync("MessageComplete", new ChatMessageResponseDto
             {

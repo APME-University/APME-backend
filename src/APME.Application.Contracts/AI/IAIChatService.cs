@@ -26,9 +26,11 @@ public interface IAIChatService : IApplicationService
     /// Generates a streaming response (for real-time chat).
     /// </summary>
     /// <param name="request">The chat request.</param>
+    /// <param name="preSearchedProducts">Optional pre-searched products to use instead of searching again.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     IAsyncEnumerable<string> ChatStreamAsync(
         ChatRequest request,
+        List<ProductSearchResult>? preSearchedProducts = null,
         CancellationToken cancellationToken = default);
 }
 

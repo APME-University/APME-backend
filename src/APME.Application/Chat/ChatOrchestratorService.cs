@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using APME.AI;
+using APME.AI.QueryUnderstanding;
 using APME.BlobStorage;
 using APME.Products;
 using Microsoft.Extensions.Logging;
@@ -19,13 +20,17 @@ namespace APME.Chat;
 /// <summary>
 /// Orchestrator service for chat operations.
 /// Coordinates RAG retrieval, context building, LLM generation, and persistence.
+/// Uses layer isolation with IChatContextService, IQueryUnderstandingService, and IFallbackStrategyProvider.
 /// </summary>
 public class ChatOrchestratorService : IChatOrchestratorService, ITransientDependency
 {
     private readonly IChatSessionRepository _sessionRepository;
     private readonly IChatMessageRepository _messageRepository;
+    private readonly IChatContextService _contextService;
     private readonly IChatContextBuilder _contextBuilder;
+    private readonly AI.QueryUnderstanding.IQueryUnderstandingService _queryUnderstandingService;
     private readonly ISemanticSearchService _semanticSearchService;
+    private readonly IFallbackStrategyProvider _fallbackStrategyProvider;
     private readonly IAIChatService _aiChatService;
     private readonly IRepository<Product, Guid> _productRepository;
     private readonly IImageUrlProvider _imageUrlProvider;
@@ -37,8 +42,11 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
     public ChatOrchestratorService(
         IChatSessionRepository sessionRepository,
         IChatMessageRepository messageRepository,
+        IChatContextService contextService,
         IChatContextBuilder contextBuilder,
+        AI.QueryUnderstanding.IQueryUnderstandingService queryUnderstandingService,
         ISemanticSearchService semanticSearchService,
+        IFallbackStrategyProvider fallbackStrategyProvider,
         IAIChatService aiChatService,
         IRepository<Product, Guid> productRepository,
         IImageUrlProvider imageUrlProvider,
@@ -49,8 +57,11 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
+        _contextService = contextService;
         _contextBuilder = contextBuilder;
+        _queryUnderstandingService = queryUnderstandingService;
         _semanticSearchService = semanticSearchService;
+        _fallbackStrategyProvider = fallbackStrategyProvider;
         _aiChatService = aiChatService;
         _productRepository = productRepository;
         _imageUrlProvider = imageUrlProvider;
@@ -77,7 +88,6 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
             sessionId,
             customerId);
 
-        // Validate session belongs to customer
         var session = await _sessionRepository.GetByCustomerAsync(
             sessionId,
             customerId,
@@ -89,40 +99,87 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
                 $"Session {sessionId} not found or does not belong to customer {customerId}");
         }
 
-        // Update session activity
         session.UpdateActivity();
         await _sessionRepository.UpdateAsync(session, cancellationToken: cancellationToken);
 
-        // Load chat context
-        var context = await _contextBuilder.LoadContextAsync(
+        QueryAnalysis? queryAnalysis = null;
+        if (_options.EnableQueryUnderstanding)
+        {
+            var analysisResult = await _queryUnderstandingService.AnalyzeQueryAsync(message, cancellationToken);
+            queryAnalysis = QueryAnalysisAdapter.ToLegacyQueryAnalysis(analysisResult);
+            _logger.LogDebug(
+                "Query analysis: Intent={Intent}, Confidence={Confidence}, ShouldUseRag={ShouldUseRag}, ProcessingTime={ProcessingTime}ms",
+                analysisResult.Intent.PrimaryIntent,
+                analysisResult.Confidence,
+                analysisResult.ShouldUseRag,
+                analysisResult.ProcessingTime.TotalMilliseconds);
+        }
+
+        var context = await _contextService.LoadSessionContextAsync(
             sessionId,
             customerId,
             cancellationToken);
 
-        // Perform RAG retrieval
-        var contextProducts = await _semanticSearchService.SearchAsync(
+        context = await _contextService.OptimizeContextAsync(
+            context,
             message,
-            _options.ContextProductCount,
-            tenantId: null, // Platform-wide search
-            shopId: null,
             cancellationToken);
 
-        // Enrich products with image URLs and slugs
-        var enrichedProducts = await EnrichProductDataAsync(contextProducts, cancellationToken);
+        string assistantContent;
+        List<ProductSearchResult> contextProducts;
 
-        context.ContextProducts = enrichedProducts;
-
-        // Build chat request
-        var chatMessages = _contextBuilder.ToChatMessages(context);
-        var chatRequest = new ChatRequest
+        if (_options.EnableFallbackStrategies && queryAnalysis != null)
         {
-            Message = message,
-            ConversationHistory = chatMessages,
-            SessionId = sessionId.ToString(),
-            ContextProductCount = _options.ContextProductCount
-        };
+            var fallbackResponse = await _fallbackStrategyProvider.GenerateWithFallbackAsync(
+                message,
+                context,
+                queryAnalysis,
+                onToken,
+                cancellationToken);
 
-        // Save user message
+            assistantContent = fallbackResponse.Response;
+            // Enrich products from fallback response with image URLs and slugs, limit to top 2
+            var limitedFallbackProducts = fallbackResponse.ContextProducts.Take(2).ToList();
+            contextProducts = await EnrichProductDataAsync(limitedFallbackProducts, cancellationToken);
+
+            _logger.LogDebug(
+                "Response generated via strategy: {Strategy}, Confidence: {Confidence}",
+                fallbackResponse.StrategyUsed,
+                fallbackResponse.Confidence);
+        }
+        else
+        {
+            var ragProducts = await _semanticSearchService.SearchAsync(
+                message,
+                Math.Min(_options.ContextProductCount, 2), // Limit to top 2 products
+                tenantId: null,
+                shopId: null,
+                cancellationToken);
+
+            contextProducts = await EnrichProductDataAsync(ragProducts, cancellationToken);
+            context.ContextProducts = contextProducts;
+
+            var chatMessages = _contextBuilder.ToChatMessages(context);
+            var chatRequest = new ChatRequest
+            {
+                Message = message,
+                ConversationHistory = chatMessages,
+                SessionId = sessionId.ToString(),
+                ContextProductCount = _options.ContextProductCount
+            };
+
+            var assistantResponse = new System.Text.StringBuilder();
+            // Pass the pre-searched and enriched products to ChatStreamAsync
+            // This ensures the AI response uses the same products we'll return to the frontend
+            await foreach (var token in _aiChatService.ChatStreamAsync(chatRequest, contextProducts, cancellationToken))
+            {
+                assistantResponse.Append(token);
+                await onToken(token);
+            }
+
+            assistantContent = assistantResponse.ToString();
+        }
+
         var nextSequence = await _messageRepository.GetNextSequenceNumberAsync(
             sessionId,
             cancellationToken);
@@ -134,19 +191,20 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
             ChatMessageRole.User,
             message);
 
-        await _messageRepository.InsertAsync(userMessage, cancellationToken: cancellationToken);
-
-        // Stream response from AI
-        var assistantResponse = new System.Text.StringBuilder();
-        await foreach (var token in _aiChatService.ChatStreamAsync(chatRequest, cancellationToken))
+        if (queryAnalysis != null)
         {
-            assistantResponse.Append(token);
-            await onToken(token);
+            var metadata = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Intent = queryAnalysis.Intent.ToString(),
+                Confidence = queryAnalysis.Confidence,
+                ProcessedQuery = queryAnalysis.ProcessedQuery,
+                EntityCount = queryAnalysis.Entities.Count
+            });
+            userMessage.SetMetadata(metadata);
         }
 
-        var assistantContent = assistantResponse.ToString();
+        await _messageRepository.InsertAsync(userMessage, cancellationToken: cancellationToken);
 
-        // Save assistant message
         var assistantSequence = await _messageRepository.GetNextSequenceNumberAsync(
             sessionId,
             cancellationToken);
@@ -158,13 +216,12 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
             ChatMessageRole.Assistant,
             assistantContent);
 
-        // Store metadata about context products
-        if (enrichedProducts.Count > 0)
+        if (contextProducts.Count > 0)
         {
             var metadata = System.Text.Json.JsonSerializer.Serialize(new
             {
-                ContextProductIds = enrichedProducts.Select(p => p.ProductId).ToList(),
-                ContextProductCount = enrichedProducts.Count
+                ContextProductIds = contextProducts.Select(p => p.ProductId).ToList(),
+                ContextProductCount = contextProducts.Count
             });
             assistantMessage.SetMetadata(metadata);
         }
@@ -179,7 +236,7 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
         return new ProcessMessageResult
         {
             Response = assistantContent,
-            ContextProducts = enrichedProducts
+            ContextProducts = contextProducts
         };
     }
 
@@ -197,7 +254,6 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
 
         var productIds = searchResults.Select(r => r.ProductId).ToList();
 
-        // Fetch products from relational DB (disable tenant filter for cross-tenant access)
         using (_dataFilter.Disable<IMultiTenant>())
         {
             var products = await _productRepository.GetListAsync(
@@ -206,7 +262,6 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
 
             var productLookup = products.ToDictionary(p => p.Id);
 
-            // Enrich search results with latest product data
             foreach (var result in searchResults)
             {
                 if (productLookup.TryGetValue(result.ProductId, out var product))
@@ -218,8 +273,15 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
                     result.SKU = product.SKU;
                     result.Slug = product.Slug;
                     
-                    // Convert blob name to full image URL
+                    // Get image URL - will be null if product has no image
                     result.ImageUrl = _imageUrlProvider.GetFullImageUrl(product.PrimaryImageUrl);
+                }
+                else
+                {
+                    // Product not found in repository - log warning but continue
+                    _logger.LogWarning(
+                        "Product {ProductId} from semantic search not found in repository",
+                        result.ProductId);
                 }
             }
         }
@@ -276,7 +338,6 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
         int count = 50,
         CancellationToken cancellationToken = default)
     {
-        // Validate session belongs to customer
         var session = await _sessionRepository.GetByCustomerAsync(
             sessionId,
             customerId,
@@ -308,7 +369,6 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
-        // Validate session belongs to customer
         var session = await _sessionRepository.GetByCustomerAsync(
             sessionId,
             customerId,
@@ -320,7 +380,6 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
                 $"Session {sessionId} not found or does not belong to customer {customerId}");
         }
 
-        // Archive the session
         session.Archive();
         await _sessionRepository.UpdateAsync(session, cancellationToken: cancellationToken);
 
@@ -352,4 +411,3 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
         }).ToList();
     }
 }
-
