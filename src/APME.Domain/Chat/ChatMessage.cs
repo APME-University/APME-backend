@@ -47,6 +47,35 @@ public class ChatMessage : CreationAuditedEntity<Guid>
     /// </summary>
     public string? Metadata { get; protected set; }
 
+    /// <summary>
+    /// Classified intent of the message.
+    /// </summary>
+    public IntentType? Intent { get; protected set; }
+
+    /// <summary>
+    /// Confidence score of the intent classification.
+    /// </summary>
+    public float? IntentConfidence { get; protected set; }
+
+    /// <summary>
+    /// JSON: [{"entity":"RAM","value":"16 GB"},{"entity":"brand","value":"ASUS"}]
+    /// </summary>
+    public string? EntitiesJson { get; protected set; }
+
+    /// <summary>
+    /// Comma-separated product IDs referenced in the message.
+    /// </summary>
+    public string? ReferencedProductIds { get; protected set; }
+
+    /// <summary>
+    /// Processing time in milliseconds for generating the response.
+    /// </summary>
+    public int? ProcessingTimeMs { get; protected set; }
+
+    // Navigation properties
+    public virtual ChatSession Session { get; protected set; } = null!;
+    public virtual IntentClassificationLog? ClassifyLog { get; protected set; }
+
     protected ChatMessage()
     {
         // Required by EF Core

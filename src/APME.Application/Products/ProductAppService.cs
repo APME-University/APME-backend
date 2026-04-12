@@ -32,6 +32,7 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
     private readonly IBlobContainer<ImageContainer> _container;
     private readonly IRepository<ProductAttribute, Guid> _productAttributeRepository;
     private readonly ICanonicalDocumentBuilder _canonicalDocumentBuilder;
+    private readonly ISearchableTextService _searchableTextService;
     private readonly IDistributedEventBus _distributedEventBus;
     private readonly ILogger<ProductAppService> _logger;
 
@@ -44,6 +45,7 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         IBlobContainer<ImageContainer> container,
         IRepository<ProductAttribute, Guid> productAttributeRepository,
         ICanonicalDocumentBuilder canonicalDocumentBuilder,
+        ISearchableTextService searchableTextService,
         IDistributedEventBus distributedEventBus,
         ILogger<ProductAppService> logger) : base(repository)
     {
@@ -54,6 +56,7 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         _container = container;
         _productAttributeRepository = productAttributeRepository;
         _canonicalDocumentBuilder = canonicalDocumentBuilder;
+        _searchableTextService = searchableTextService;
         _distributedEventBus = distributedEventBus;
         _logger = logger;
     }
@@ -82,6 +85,10 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         
         // Build canonical document for AI embeddings (RAG Architecture)
         await BuildAndSaveCanonicalDocumentAsync(product);
+        
+        // Build searchable text for keyword search
+        product.SetSearchableText(await _searchableTextService.BuildAsync(product.Id));
+        await Repository.UpdateAsync(product, autoSave: true);
         
         // Emit product created event for embedding generation via outbox
         await EmitProductChangedEventAsync(product, ProductChangeType.Created);
@@ -112,6 +119,10 @@ public class ProductAppService : CrudAppService<Product, ProductDto, Guid, GetPr
         
         // Rebuild canonical document for AI embeddings (RAG Architecture)
         await BuildAndSaveCanonicalDocumentAsync(product);
+        
+        // Rebuild searchable text for keyword search
+        product.SetSearchableText(await _searchableTextService.BuildAsync(product.Id));
+        await Repository.UpdateAsync(product, autoSave: true);
         
         // Emit product updated event for embedding regeneration via outbox
         await EmitProductChangedEventAsync(product, ProductChangeType.Updated);

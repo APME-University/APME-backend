@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using APME.Products;
 using Volo.Abp.Domain.Entities.Auditing;
 using Volo.Abp.MultiTenancy;
 
@@ -30,9 +31,15 @@ public class Category : FullAuditedAggregateRoot<Guid>, IMultiTenant
 
     public virtual ICollection<Category> Children { get; set; }
 
+    public virtual ICollection<Product> Products { get; set; }
+
+    public virtual ICollection<AttributeGroup> AttributeGroups { get; set; }
+
     protected Category()
     {
         Children = new List<Category>();
+        Products = new List<Product>();
+        AttributeGroups = new List<AttributeGroup>();
     }
 
     public Category(
@@ -49,6 +56,8 @@ public class Category : FullAuditedAggregateRoot<Guid>, IMultiTenant
         DisplayOrder = 0;
         IsActive = true;
         Children = new List<Category>();
+        Products = new List<Product>();
+        AttributeGroups = new List<AttributeGroup>();
     }
 
     public void UpdateName(string name)

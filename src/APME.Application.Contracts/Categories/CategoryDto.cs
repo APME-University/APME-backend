@@ -20,5 +20,8 @@ public class CategoryDto : FullAuditedEntityDto<Guid>
     public bool IsActive { get; set; }
 
     public string? ImageUrl { get; set; }
+
+    // Navigation display
+    public int AttributeGroupCount { get; set; }
 }
 

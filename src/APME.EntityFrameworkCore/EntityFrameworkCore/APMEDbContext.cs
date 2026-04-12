@@ -40,8 +40,17 @@ public class APMEDbContext :
     public DbSet<Customer> Customers { get; set; }
     public DbSet<CustomerUserRole> CustomerUserRoles { get; set; }
     public DbSet<Category> Categories { get; set; }
+    public DbSet<Brand> Brands { get; set; }
     public DbSet<Product> Products { get; set; }
+    public DbSet<ProductVariant> ProductVariants { get; set; }
+    public DbSet<ProductImage> ProductImages { get; set; }
     public DbSet<ProductAttribute> ProductAttributes { get; set; }
+
+    // Attribute engine
+    public DbSet<AttributeGroup> AttributeGroups { get; set; }
+    public DbSet<AttributeOption> AttributeOptions { get; set; }
+    public DbSet<ProductAttributeValue> ProductAttributeValues { get; set; }
+    public DbSet<ProductTag> ProductTags { get; set; }
 
     // Cart entities
     public DbSet<Cart> Carts { get; set; }
@@ -53,10 +62,14 @@ public class APMEDbContext :
 
     // AI/RAG entities
     public DbSet<ProductEmbedding> ProductEmbeddings { get; set; }
+    public DbSet<ImageEmbedding> ImageEmbeddings { get; set; }
+    public DbSet<SearchQueryLog> SearchQueryLogs { get; set; }
 
     // Chat entities
     public DbSet<ChatSession> ChatSessions { get; set; }
     public DbSet<ChatMessage> ChatMessages { get; set; }
+    public DbSet<IntentClassificationLog> IntentClassificationLogs { get; set; }
+    public DbSet<ConversationContext> ConversationContexts { get; set; }
 
     #region Entities from the modules
 
@@ -119,12 +132,22 @@ public class APMEDbContext :
         ConfigureShops(builder);
         ConfigureCustomers(builder);
         ConfigureCategories(builder);
+        ConfigureBrands(builder);
         ConfigureProducts(builder);
         ConfigureProductAttributes(builder);
+        ConfigureProductVariants(builder);
+        ConfigureProductImages(builder);
+        ConfigureAttributeGroups(builder);
+        ConfigureAttributeOptions(builder);
+        ConfigureProductAttributeValues(builder);
+        ConfigureProductTags(builder);
         ConfigureCarts(builder);
         ConfigureOrders(builder);
         ConfigureProductEmbeddings(builder);
+        ConfigureImageEmbeddings(builder);
+        ConfigureSearchQueryLogs(builder);
         ConfigureChat(builder);
+        ConfigureConversationContexts(builder);
     }
 
     private void ConfigureShops(ModelBuilder builder)
@@ -227,13 +250,20 @@ public class APMEDbContext :
 
             b.Property(x => x.Name).IsRequired().HasMaxLength(256);
             b.Property(x => x.Slug).IsRequired().HasMaxLength(256);
+            b.Property(x => x.ShortDescription).HasMaxLength(512);
             b.Property(x => x.Description).HasMaxLength(4000);
             b.Property(x => x.SKU).IsRequired().HasMaxLength(128);
             b.Property(x => x.Price).HasColumnType("decimal(18,2)");
             b.Property(x => x.CompareAtPrice).HasColumnType("decimal(18,2)");
+            b.Property(x => x.SalePrice).HasColumnType("decimal(18,2)");
+            b.Property(x => x.Currency).IsRequired().HasMaxLength(3).HasDefaultValue("USD");
+            b.Property(x => x.StockStatus).IsRequired().HasDefaultValue(StockStatus.InStock);
+            b.Property(x => x.IsFeatured).HasDefaultValue(false);
             b.Property(x => x.Attributes).HasColumnType("jsonb");
             b.Property(x => x.PrimaryImageUrl).HasMaxLength(512);
             b.Property(x => x.ImageUrls).HasColumnType("jsonb");
+            b.Property(x => x.SearchableText).HasMaxLength(4000);
+            b.Property(x => x.SearchHints).HasMaxLength(2000);
             
             // Concurrency control for stock updates
             b.Property(x => x.StockConcurrencyStamp).IsRequired().HasMaxLength(40).IsConcurrencyToken();
@@ -251,20 +281,30 @@ public class APMEDbContext :
                 .OnDelete(DeleteBehavior.Restrict);
 
             b.HasOne<Category>()
-                .WithMany()
+                .WithMany(x => x.Products)
                 .HasForeignKey(x => x.CategoryId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            b.HasOne(x => x.Brand)
+                .WithMany(x => x.Products)
+                .HasForeignKey(x => x.BrandId)
                 .OnDelete(DeleteBehavior.SetNull);
 
             // Indexes
             b.HasIndex(x => x.TenantId);
             b.HasIndex(x => x.ShopId);
             b.HasIndex(x => x.CategoryId);
+            b.HasIndex(x => x.BrandId);
             b.HasIndex(x => x.Slug);
             b.HasIndex(x => x.SKU);
+            b.HasIndex(x => x.IsFeatured);
+            b.HasIndex(x => x.StockStatus);
             b.HasIndex(x => new { x.TenantId, x.Slug }).IsUnique();
             b.HasIndex(x => new { x.TenantId, x.SKU }).IsUnique();
             // Index for finding products that need embedding generation
             b.HasIndex(x => new { x.IsActive, x.IsPublished, x.EmbeddingGenerated });
+            // Full-text search index on SearchableText
+            b.HasIndex(x => x.SearchableText);
         });
     }
 
@@ -276,7 +316,12 @@ public class APMEDbContext :
 
             b.Property(x => x.Name).IsRequired().HasMaxLength(128);
             b.Property(x => x.DisplayName).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Slug).HasMaxLength(128);
             b.Property(x => x.DataType).IsRequired();
+            b.Property(x => x.IsSearchable).HasDefaultValue(true);
+            b.Property(x => x.IsFilterable).HasDefaultValue(false);
+            b.Property(x => x.IsComparable).HasDefaultValue(false);
+            b.Property(x => x.ValidationRulesJson).HasColumnType("jsonb");
             
             // Embedding control properties for RAG/AI
             b.Property(x => x.IncludeInEmbedding).HasDefaultValue(true);
@@ -289,13 +334,21 @@ public class APMEDbContext :
                 .HasForeignKey(x => x.ShopId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            b.HasOne(x => x.Group)
+                .WithMany(x => x.Definitions)
+                .HasForeignKey(x => x.AttributeGroupId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             // Indexes
             b.HasIndex(x => x.TenantId);
             b.HasIndex(x => x.ShopId);
             b.HasIndex(x => x.Name);
+            b.HasIndex(x => x.AttributeGroupId);
             b.HasIndex(x => new { x.TenantId, x.ShopId, x.Name }).IsUnique();
             // Index for embedding-included attributes (for efficient filtering)
             b.HasIndex(x => new { x.ShopId, x.IncludeInEmbedding });
+            // Index for filterable/searchable attributes
+            b.HasIndex(x => new { x.IsSearchable, x.IsFilterable });
         });
     }
 
@@ -556,6 +609,7 @@ public class APMEDbContext :
             b.Property(x => x.LastActivityAt).IsRequired();
             b.Property(x => x.Title).HasMaxLength(256);
             b.Property(x => x.Metadata).HasColumnType("jsonb");
+            b.Property(x => x.UserAgent).HasMaxLength(512);
 
             // Foreign key to Customer
             b.HasOne<Customer>()
@@ -582,10 +636,15 @@ public class APMEDbContext :
             b.Property(x => x.Content).IsRequired().HasMaxLength(8000);
             b.Property(x => x.IsArchived).IsRequired().HasDefaultValue(false);
             b.Property(x => x.Metadata).HasColumnType("jsonb");
+            b.Property(x => x.Intent);
+            b.Property(x => x.IntentConfidence);
+            b.Property(x => x.EntitiesJson).HasColumnType("jsonb");
+            b.Property(x => x.ReferencedProductIds).HasMaxLength(2000);
+            b.Property(x => x.ProcessingTimeMs);
 
             // Foreign key to ChatSession
-            b.HasOne<ChatSession>()
-                .WithMany()
+            b.HasOne(x => x.Session)
+                .WithMany(x => x.Messages)
                 .HasForeignKey(x => x.SessionId)
                 .OnDelete(DeleteBehavior.Cascade);
 
@@ -593,6 +652,7 @@ public class APMEDbContext :
             b.HasIndex(x => x.SessionId);
             b.HasIndex(x => x.IsArchived);
             b.HasIndex(x => x.CreationTime);
+            b.HasIndex(x => x.Intent);
             // Unique constraint: one message per sequence number per session
             b.HasIndex(x => new { x.SessionId, x.SequenceNumber })
                 .IsUnique()
@@ -601,6 +661,286 @@ public class APMEDbContext :
             b.HasIndex(x => new { x.SessionId, x.CreationTime });
             // Index for archival queries
             b.HasIndex(x => new { x.IsArchived, x.CreationTime });
+        });
+    }
+
+    private void ConfigureBrands(ModelBuilder builder)
+    {
+        builder.Entity<Brand>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "Brands", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.Name).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Slug).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Description).HasMaxLength(2000);
+            b.Property(x => x.LogoUrl).HasMaxLength(512);
+            b.Property(x => x.IsActive).HasDefaultValue(true);
+
+            // Indexes
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => x.Slug);
+            b.HasIndex(x => new { x.TenantId, x.Slug }).IsUnique();
+        });
+    }
+
+    private void ConfigureProductVariants(ModelBuilder builder)
+    {
+        builder.Entity<ProductVariant>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ProductVariants", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ProductId).IsRequired();
+            b.Property(x => x.SKU).IsRequired().HasMaxLength(128);
+            b.Property(x => x.Name).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Price).HasColumnType("decimal(18,2)");
+            b.Property(x => x.SalePrice).HasColumnType("decimal(18,2)");
+            b.Property(x => x.StockStatus).IsRequired().HasDefaultValue(StockStatus.InStock);
+            b.Property(x => x.IsDefault).HasDefaultValue(false);
+            b.Property(x => x.VariantAttributesJson).HasColumnType("jsonb");
+
+            // Foreign keys
+            b.HasOne(x => x.Product)
+                .WithMany(x => x.Variants)
+                .HasForeignKey(x => x.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.ProductId);
+            b.HasIndex(x => x.SKU);
+            b.HasIndex(x => new { x.TenantId, x.SKU }).IsUnique();
+        });
+    }
+
+    private void ConfigureProductImages(ModelBuilder builder)
+    {
+        builder.Entity<ProductImage>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ProductImages", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ProductId).IsRequired();
+            b.Property(x => x.Url).IsRequired().HasMaxLength(512);
+            b.Property(x => x.AltText).HasMaxLength(256);
+            b.Property(x => x.DisplayOrder).HasDefaultValue(0);
+            b.Property(x => x.IsPrimary).HasDefaultValue(false);
+
+            // Foreign keys
+            b.HasOne(x => x.Product)
+                .WithMany(x => x.Images)
+                .HasForeignKey(x => x.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasOne(x => x.Variant)
+                .WithMany(x => x.Images)
+                .HasForeignKey(x => x.VariantId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Indexes
+            b.HasIndex(x => x.ProductId);
+            b.HasIndex(x => x.VariantId);
+            b.HasIndex(x => x.IsPrimary);
+        });
+    }
+
+    private void ConfigureAttributeGroups(ModelBuilder builder)
+    {
+        builder.Entity<AttributeGroup>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "AttributeGroups", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.Name).IsRequired().HasMaxLength(128);
+            b.Property(x => x.DisplayOrder).HasDefaultValue(0);
+
+            // Foreign keys
+            b.HasOne(x => x.Category)
+                .WithMany(x => x.AttributeGroups)
+                .HasForeignKey(x => x.CategoryId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Indexes
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => x.CategoryId);
+        });
+    }
+
+    private void ConfigureAttributeOptions(ModelBuilder builder)
+    {
+        builder.Entity<AttributeOption>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "AttributeOptions", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ProductAttributeId).IsRequired();
+            b.Property(x => x.Value).IsRequired().HasMaxLength(256);
+            b.Property(x => x.DisplayValue).IsRequired().HasMaxLength(256);
+            b.Property(x => x.DisplayOrder).HasDefaultValue(0);
+
+            // Foreign keys
+            b.HasOne(x => x.AttributeDefinition)
+                .WithMany(x => x.Options)
+                .HasForeignKey(x => x.ProductAttributeId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.ProductAttributeId);
+        });
+    }
+
+    private void ConfigureProductAttributeValues(ModelBuilder builder)
+    {
+        builder.Entity<ProductAttributeValue>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ProductAttributeValues", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ProductId).IsRequired();
+            b.Property(x => x.ProductAttributeId).IsRequired();
+            b.Property(x => x.TextValue).HasMaxLength(2000);
+            b.Property(x => x.NumericValue).HasColumnType("decimal(18,4)");
+            b.Property(x => x.DisplayValue).HasMaxLength(512);
+
+            // Foreign keys
+            b.HasOne(x => x.Product)
+                .WithMany()
+                .HasForeignKey(x => x.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasOne(x => x.AttributeDefinition)
+                .WithMany(x => x.ProductAttributeValues)
+                .HasForeignKey(x => x.ProductAttributeId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.ProductId);
+            b.HasIndex(x => x.ProductAttributeId);
+            // Unique: one value per product per attribute
+            b.HasIndex(x => new { x.ProductId, x.ProductAttributeId }).IsUnique();
+        });
+    }
+
+    private void ConfigureProductTags(ModelBuilder builder)
+    {
+        builder.Entity<ProductTag>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ProductTags", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ProductId).IsRequired();
+            b.Property(x => x.Tag).IsRequired().HasMaxLength(64);
+
+            // Foreign keys
+            b.HasOne(x => x.Product)
+                .WithMany(x => x.Tags)
+                .HasForeignKey(x => x.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.ProductId);
+            b.HasIndex(x => x.Tag);
+            // Unique: one tag per product
+            b.HasIndex(x => new { x.ProductId, x.Tag }).IsUnique();
+        });
+    }
+
+    private void ConfigureImageEmbeddings(ModelBuilder builder)
+    {
+        builder.Entity<ImageEmbedding>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ImageEmbeddings", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ProductImageId);
+            b.Property(x => x.ImageUrl).IsRequired().HasMaxLength(512);
+            b.Property(x => x.ModelName).IsRequired().HasMaxLength(64);
+            b.Property(x => x.Dimensions).IsRequired();
+            b.Property(x => x.GeneratedAt).IsRequired();
+
+            // Vector embedding - using pgvector type
+            b.Property(x => x.Embedding)
+                .HasColumnType("vector(768)")
+                .IsRequired();
+
+            // Indexes
+            b.HasIndex(x => x.ProductImageId);
+            b.HasIndex(x => x.ImageUrl);
+
+            // HNSW index for vector similarity search
+            b.HasIndex(x => x.Embedding)
+                .HasMethod("hnsw")
+                .HasOperators("vector_cosine_ops")
+                .HasDatabaseName("IX_ImageEmbeddings_Embedding_HNSW");
+        });
+    }
+
+    private void ConfigureSearchQueryLogs(ModelBuilder builder)
+    {
+        builder.Entity<SearchQueryLog>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "SearchQueryLogs", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.Query).IsRequired().HasMaxLength(512);
+            b.Property(x => x.RewrittenQuery).HasMaxLength(512);
+            b.Property(x => x.ClassifiedIntent).HasMaxLength(64);
+            b.Property(x => x.TopResultIdsJson).HasColumnType("jsonb");
+            b.Property(x => x.SessionId).HasMaxLength(64);
+            b.Property(x => x.ProcessingTimeMs).IsRequired();
+            b.Property(x => x.CreatedAt).IsRequired();
+
+            // Indexes
+            b.HasIndex(x => x.CreatedAt);
+            b.HasIndex(x => x.ClassifiedIntent);
+            b.HasIndex(x => x.SessionId);
+        });
+    }
+
+    private void ConfigureConversationContexts(ModelBuilder builder)
+    {
+        builder.Entity<ConversationContext>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ConversationContexts", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.SessionId).IsRequired();
+            b.Property(x => x.ContextJson).HasColumnType("jsonb");
+            b.Property(x => x.UpdatedAt).IsRequired();
+
+            // One-to-one with ChatSession
+            b.HasOne(x => x.Session)
+                .WithOne(x => x.Context)
+                .HasForeignKey<ConversationContext>(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.SessionId).IsUnique();
+        });
+
+        builder.Entity<IntentClassificationLog>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "IntentClassificationLogs", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ChatMessageId).IsRequired();
+            b.Property(x => x.Intent).IsRequired();
+            b.Property(x => x.Confidence).IsRequired();
+            b.Property(x => x.ModelUsed).HasMaxLength(64);
+            b.Property(x => x.RawResponseJson).HasColumnType("jsonb");
+            b.Property(x => x.ProcessingTimeMs).IsRequired();
+            b.Property(x => x.CreatedAt).IsRequired();
+
+            // Foreign keys
+            b.HasOne(x => x.ChatMessage)
+                .WithOne(x => x.ClassifyLog)
+                .HasForeignKey<IntentClassificationLog>(x => x.ChatMessageId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Indexes
+            b.HasIndex(x => x.ChatMessageId).IsUnique();
+            b.HasIndex(x => x.Intent);
+            b.HasIndex(x => x.CreatedAt);
         });
     }
 }

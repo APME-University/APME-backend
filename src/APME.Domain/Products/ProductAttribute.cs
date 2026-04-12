@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Volo.Abp.Domain.Entities.Auditing;
 using Volo.Abp.MultiTenancy;
 
@@ -14,11 +15,35 @@ public class ProductAttribute : FullAuditedEntity<Guid>, IMultiTenant
 
     public string DisplayName { get; set; }
 
+    public string? Slug { get; set; }
+
+    public Guid? AttributeGroupId { get; set; }
+
     public ProductAttributeDataType DataType { get; set; }
 
     public bool IsRequired { get; set; }
 
     public int DisplayOrder { get; set; }
+
+    /// <summary>
+    /// Include in SearchableText → embedding.
+    /// </summary>
+    public bool IsSearchable { get; set; } = true;
+
+    /// <summary>
+    /// Expose in filter sidebar.
+    /// </summary>
+    public bool IsFilterable { get; set; }
+
+    /// <summary>
+    /// Include in comparison table response.
+    /// </summary>
+    public bool IsComparable { get; set; }
+
+    /// <summary>
+    /// JSON: {"min": 0, "max": 100} or {"maxLength": 500}
+    /// </summary>
+    public string? ValidationRulesJson { get; set; }
 
     /// <summary>
     /// Whether this attribute should be included in AI embeddings.
@@ -42,6 +67,11 @@ public class ProductAttribute : FullAuditedEntity<Guid>, IMultiTenant
     {
         // Required by EF Core
     }
+
+    // Navigation properties
+    public virtual AttributeGroup? Group { get; set; }
+    public virtual ICollection<AttributeOption> Options { get; set; } = new List<AttributeOption>();
+    public virtual ICollection<ProductAttributeValue> ProductAttributeValues { get; set; } = new List<ProductAttributeValue>();
 
     public ProductAttribute(
         Guid id,

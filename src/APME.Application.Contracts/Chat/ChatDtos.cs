@@ -28,6 +28,9 @@ public class ChatMessageResponseDto
     public string Content { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public List<ProductSearchResultDto>? ContextProducts { get; set; }
+    public string? Intent { get; set; }
+    public double? IntentConfidence { get; set; }
+    public List<string>? ReferencedProductIds { get; set; }
 }
 
 /// <summary>
@@ -58,6 +61,7 @@ public class ChatSessionDto
     public ChatSessionStatus Status { get; set; }
     public DateTime LastActivityAt { get; set; }
     public string? Title { get; set; }
+    public string? UserAgent { get; set; }
 }
 
 /// <summary>

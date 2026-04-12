@@ -102,18 +102,22 @@ public class ChatOrchestratorService : IChatOrchestratorService, ITransientDepen
         session.UpdateActivity();
         await _sessionRepository.UpdateAsync(session, cancellationToken: cancellationToken);
 
+        // Commented out: Fixed keywords for message recognition and classification
+        // QueryAnalysis? queryAnalysis = null;
+        // if (_options.EnableQueryUnderstanding)
+        // {
+        //     var analysisResult = await _queryUnderstandingService.AnalyzeQueryAsync(message, cancellationToken);
+        //     queryAnalysis = QueryAnalysisAdapter.ToLegacyQueryAnalysis(analysisResult);
+        //     _logger.LogDebug(
+        //         "Query analysis: Intent={Intent}, Confidence={Confidence}, ShouldUseRag={ShouldUseRag}, ProcessingTime={ProcessingTime}ms",
+        //         analysisResult.Intent.PrimaryIntent,
+        //         analysisResult.Confidence,
+        //         analysisResult.ShouldUseRag,
+        //         analysisResult.ProcessingTime.TotalMilliseconds);
+        // }
+        
+        // Proceed directly without query analysis
         QueryAnalysis? queryAnalysis = null;
-        if (_options.EnableQueryUnderstanding)
-        {
-            var analysisResult = await _queryUnderstandingService.AnalyzeQueryAsync(message, cancellationToken);
-            queryAnalysis = QueryAnalysisAdapter.ToLegacyQueryAnalysis(analysisResult);
-            _logger.LogDebug(
-                "Query analysis: Intent={Intent}, Confidence={Confidence}, ShouldUseRag={ShouldUseRag}, ProcessingTime={ProcessingTime}ms",
-                analysisResult.Intent.PrimaryIntent,
-                analysisResult.Confidence,
-                analysisResult.ShouldUseRag,
-                analysisResult.ProcessingTime.TotalMilliseconds);
-        }
 
         var context = await _contextService.LoadSessionContextAsync(
             sessionId,

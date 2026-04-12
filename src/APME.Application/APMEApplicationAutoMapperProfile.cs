@@ -61,5 +61,13 @@ public class APMEApplicationAutoMapperProfile : Profile
         // ProductAttribute mappings
         CreateMap<ProductAttribute, ProductAttributeDto>();
         CreateMap<CreateUpdateProductAttributeDto, ProductAttribute>();
+
+        // Brand mappings
+        CreateMap<Brand, BrandDto>();
+        CreateMap<CreateUpdateBrandDto, Brand>();
+
+        // AttributeGroup mappings
+        CreateMap<AttributeGroup, AttributeGroupDto>();
+        CreateMap<CreateUpdateAttributeGroupDto, AttributeGroup>();
     }
 }

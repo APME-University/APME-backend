@@ -12,6 +12,9 @@ public class CreateUpdateProductAttributeDto
     [StringLength(128)]
     public string Name { get; set; }
 
+    [StringLength(128)]
+    public string? Slug { get; set; }
+
     [Required]
     [StringLength(256)]
     public string DisplayName { get; set; }
@@ -22,6 +25,17 @@ public class CreateUpdateProductAttributeDto
     public bool IsRequired { get; set; }
 
     public int DisplayOrder { get; set; }
+
+    public Guid? AttributeGroupId { get; set; }
+
+    public bool IsSearchable { get; set; } = true;
+
+    public bool IsFilterable { get; set; }
+
+    public bool IsComparable { get; set; }
+
+    [StringLength(2000)]
+    public string? ValidationRulesJson { get; set; }
 
     /// <summary>
     /// Whether this attribute should be included in AI embeddings.

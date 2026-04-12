@@ -13,7 +13,12 @@ public enum ChatMessageRole
     /// <summary>
     /// Message from the AI assistant.
     /// </summary>
-    Assistant = 1
+    Assistant = 1,
+
+    /// <summary>
+    /// System instruction message.
+    /// </summary>
+    System = 2
 }
 
 /// <summary>

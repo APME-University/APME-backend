@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Volo.Abp.Domain.Entities.Auditing;
 
 namespace APME.Chat;
@@ -37,6 +38,15 @@ public class ChatSession : FullAuditedAggregateRoot<Guid>
     /// </summary>
     public string? Title { get; protected set; }
 
+    /// <summary>
+    /// Client user agent string.
+    /// </summary>
+    public string? UserAgent { get; protected set; }
+
+    // Navigation properties
+    public virtual ICollection<ChatMessage> Messages { get; protected set; }
+    public virtual ConversationContext? Context { get; protected set; }
+
     protected ChatSession()
     {
         // Required by EF Core
@@ -49,6 +59,7 @@ public class ChatSession : FullAuditedAggregateRoot<Guid>
         CustomerId = customerId;
         Status = ChatSessionStatus.Active;
         LastActivityAt = DateTime.UtcNow;
+        Messages = new List<ChatMessage>();
     }
 
     /// <summary>

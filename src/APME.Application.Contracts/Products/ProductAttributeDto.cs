@@ -9,6 +9,8 @@ public class ProductAttributeDto : FullAuditedEntityDto<Guid>
 
     public string Name { get; set; }
 
+    public string? Slug { get; set; }
+
     public string DisplayName { get; set; }
 
     public ProductAttributeDataType DataType { get; set; }
@@ -16,6 +18,16 @@ public class ProductAttributeDto : FullAuditedEntityDto<Guid>
     public bool IsRequired { get; set; }
 
     public int DisplayOrder { get; set; }
+
+    public Guid? AttributeGroupId { get; set; }
+
+    public bool IsSearchable { get; set; }
+
+    public bool IsFilterable { get; set; }
+
+    public bool IsComparable { get; set; }
+
+    public string? ValidationRulesJson { get; set; }
 
     /// <summary>
     /// Whether this attribute is included in AI embeddings for semantic search.
@@ -31,5 +43,8 @@ public class ProductAttributeDto : FullAuditedEntityDto<Guid>
     /// Human-readable semantic label for embedding context.
     /// </summary>
     public string? SemanticLabel { get; set; }
+
+    // Navigation display
+    public string? AttributeGroupName { get; set; }
 }
 

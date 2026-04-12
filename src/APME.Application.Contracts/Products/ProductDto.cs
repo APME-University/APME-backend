@@ -10,9 +10,13 @@ public class ProductDto : FullAuditedEntityDto<Guid>
 
     public Guid? CategoryId { get; set; }
 
+    public Guid? BrandId { get; set; }
+
     public string Name { get; set; }
 
     public string Slug { get; set; }
+
+    public string? ShortDescription { get; set; }
 
     public string? Description { get; set; }
 
@@ -22,11 +26,19 @@ public class ProductDto : FullAuditedEntityDto<Guid>
 
     public decimal? CompareAtPrice { get; set; }
 
+    public decimal? SalePrice { get; set; }
+
+    public string Currency { get; set; } = "USD";
+
+    public StockStatus StockStatus { get; set; } = StockStatus.InStock;
+
     public int StockQuantity { get; set; }
 
     public bool IsActive { get; set; }
 
     public bool IsPublished { get; set; }
+
+    public bool IsFeatured { get; set; }
 
     public string? Attributes { get; set; }
 
@@ -34,12 +46,24 @@ public class ProductDto : FullAuditedEntityDto<Guid>
 
     public List<string>? ImageUrls { get; set; }
 
-    public bool IsInStock => StockQuantity > 0;
+    public string? SearchableText { get; set; }
 
-    public bool IsOnSale => CompareAtPrice.HasValue && CompareAtPrice.Value > Price;
+    public string? SearchHints { get; set; }
+
+    // Navigation display
+    public string? BrandName { get; set; }
+
+    public List<string>? Tags { get; set; }
+
+    // Computed
+    public bool IsInStock => StockStatus == StockStatus.InStock || StockStatus == StockStatus.LowStock;
+
+    public bool IsOnSale => (CompareAtPrice.HasValue && CompareAtPrice.Value > Price) || SalePrice.HasValue;
 
     public bool HasImages => ImageUrls != null && ImageUrls.Count > 0;
 
     public int ImageCount => ImageUrls?.Count ?? 0;
+
+    public string StockStatusLabel => StockStatus.ToString();
 }
 
