@@ -3,6 +3,7 @@ using System;
 using APME.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -13,9 +14,11 @@ using Volo.Abp.EntityFrameworkCore;
 namespace APME.Migrations
 {
     [DbContext(typeof(APMEDbContext))]
-    partial class APMEDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260414195626_Phase3_EmbeddingStatus")]
+    partial class Phase3_EmbeddingStatus
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

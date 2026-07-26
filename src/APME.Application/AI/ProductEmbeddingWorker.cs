@@ -90,11 +90,34 @@ public class ProductEmbeddingWorker : ITransientDependency
                     return;
                 }
 
+                // ── EmbeddingStatus lifecycle ────────────────────────
+                // Mark existing embeddings as Processing before generating
+                var existingEmbeddings = await _embeddingRepository.GetByProductIdAsync(productId);
+                foreach (var existing in existingEmbeddings)
+                {
+                    existing.MarkProcessing();
+                }
+
                 await GenerateAndStoreEmbeddingsAsync(product);
 
                 // Mark embedding as generated on the product
                 product.MarkEmbeddingGenerated();
                 await _productRepository.UpdateAsync(product);
+
+                // Update status to Current + set SearchableTextHash on all embeddings
+                var updatedEmbeddings = await _embeddingRepository.GetByProductIdAsync(productId);
+                var hash = ProductEmbedding.ComputeHash(product.SearchableText ?? "");
+                foreach (var emb in updatedEmbeddings)
+                {
+                    emb.SearchableTextHash = hash;
+                    // UpdateEmbedding already sets Status=Current, but ensure it for any edge cases
+                    if (emb.Status != EmbeddingStatus.Current)
+                    {
+                        emb.Status = EmbeddingStatus.Current;
+                        emb.LastAttemptAt = DateTime.UtcNow;
+                        emb.ErrorMessage = null;
+                    }
+                }
 
                 _logger.LogInformation(
                     "Successfully generated embedding for product {ProductId} ({ProductName})",
@@ -106,6 +129,22 @@ public class ProductEmbeddingWorker : ITransientDependency
             _logger.LogError(ex,
                 "Failed to generate embedding for product {ProductId}",
                 productId);
+
+            // Mark embeddings as failed
+            try
+            {
+                var failedEmbeddings = await _embeddingRepository.GetByProductIdAsync(productId);
+                foreach (var emb in failedEmbeddings)
+                {
+                    emb.MarkFailed(ex.Message, maxRetries: 3);
+                }
+            }
+            catch (Exception markEx)
+            {
+                _logger.LogWarning(markEx,
+                    "Failed to mark embeddings as failed for product {ProductId}", productId);
+            }
+
             throw; // Let Hangfire handle retry
         }
     }
@@ -147,6 +186,7 @@ public class ProductEmbeddingWorker : ITransientDependency
             foreach (var embedding in embeddings)
             {
                 embedding.Deactivate();
+                embedding.MarkStale();
             }
 
             _logger.LogInformation(
@@ -183,6 +223,7 @@ public class ProductEmbeddingWorker : ITransientDependency
             foreach (var embedding in embeddings)
             {
                 embedding.Activate();
+                embedding.MarkQueued(); // Will be set to Current by GenerateEmbeddingAsync
             }
 
             _logger.LogInformation(

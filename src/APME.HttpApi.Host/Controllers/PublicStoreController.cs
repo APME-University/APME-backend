@@ -30,6 +30,7 @@ public class PublicStoreController : APMEController
 {
     private readonly IRepository<Product, Guid> _productRepository;
     private readonly IRepository<Category, Guid> _categoryRepository;
+    private readonly IRepository<Brand, Guid> _brandRepository;
     private readonly IConfiguration _configuration;
     private readonly DefaultBlobContainerConfigurationProvider _blobContainerConfigurationProvider;
     private readonly DefaultBlobFilePathCalculator _defaultBlobFilePathCalculator;
@@ -38,6 +39,7 @@ public class PublicStoreController : APMEController
     public PublicStoreController(
         IRepository<Product, Guid> productRepository,
         IRepository<Category, Guid> categoryRepository,
+        IRepository<Brand, Guid> brandRepository,
         IConfiguration configuration,
         DefaultBlobContainerConfigurationProvider blobContainerConfigurationProvider,
         DefaultBlobFilePathCalculator defaultBlobFilePathCalculator,
@@ -45,6 +47,7 @@ public class PublicStoreController : APMEController
     {
         _productRepository = productRepository;
         _categoryRepository = categoryRepository;
+        _brandRepository = brandRepository;
         _configuration = configuration;
         _blobContainerConfigurationProvider = blobContainerConfigurationProvider;
         _defaultBlobFilePathCalculator = defaultBlobFilePathCalculator;
@@ -59,9 +62,10 @@ public class PublicStoreController : APMEController
     [HttpGet("homepage")]
     public async Task<ActionResult<StoreHomepageDto>> GetHomepage(int featuredCount = 8, int saleCount = 6, int latestCount = 8)
     {
-        using (_filter.Disable<IMultiTenant>()) { 
+        using (_filter.Disable<IMultiTenant>()) {
             var products = await _productRepository.GetListAsync(p => p.IsActive && p.IsPublished);
-        var categories = await _categoryRepository.GetListAsync(c => c.IsActive);
+            var categories = await _categoryRepository.GetListAsync(c => c.IsActive);
+            var brands = await _brandRepository.GetListAsync(b => b.IsActive);
 
         var homepage = new StoreHomepageDto
         {
@@ -69,22 +73,22 @@ public class PublicStoreController : APMEController
                 .OrderByDescending(p => p.StockQuantity > 0)
                 .ThenBy(p => Guid.NewGuid()) // Random for variety
                 .Take(featuredCount)
-                .Select(MapToListItem)
+                .Select(p => MapToListItem(p, brands))
                 .ToList(),
-                
+
             OnSaleProducts = products
                 .Where(p => p.CompareAtPrice.HasValue && p.CompareAtPrice > p.Price)
                 .OrderByDescending(p => (p.CompareAtPrice!.Value - p.Price) / p.CompareAtPrice.Value)
                 .Take(saleCount)
-                .Select(MapToListItem)
+                .Select(p => MapToListItem(p, brands))
                 .ToList(),
-                
+
             LatestProducts = products
                 .OrderByDescending(p => p.CreationTime)
                 .Take(latestCount)
-                .Select(MapToListItem)
+                .Select(p => MapToListItem(p, brands))
                 .ToList(),
-                
+
             FeaturedCategories = categories
                 .Where(c => c.ParentId == null)
                 .OrderBy(c => c.DisplayOrder)
@@ -99,7 +103,7 @@ public class PublicStoreController : APMEController
                     FeaturedProducts = products
                         .Where(p => p.CategoryId == c.Id)
                         .Take(4)
-                        .Select(MapToListItem)
+                        .Select(p => MapToListItem(p, brands))
                         .ToList()
                 })
                 .ToList()
@@ -119,12 +123,13 @@ public class PublicStoreController : APMEController
         {
 
             var products = await _productRepository.GetListAsync(p => p.IsActive && p.IsPublished);
+            var brands = await _brandRepository.GetListAsync(b => b.IsActive);
 
             var featured = products
                 .OrderByDescending(p => p.StockQuantity > 0)
                 .ThenBy(p => Guid.NewGuid())
                 .Take(maxCount)
-                .Select(MapToListItem)
+                .Select(p => MapToListItem(p, brands))
                 .ToList();
 
             return Ok(featured);
@@ -143,11 +148,12 @@ public class PublicStoreController : APMEController
             var products = await _productRepository.GetListAsync(p =>
             p.IsActive && p.IsPublished &&
             p.CompareAtPrice.HasValue && p.CompareAtPrice > p.Price);
+            var brands = await _brandRepository.GetListAsync(b => b.IsActive);
 
             var onSale = products
                 .OrderByDescending(p => (p.CompareAtPrice!.Value - p.Price) / p.CompareAtPrice.Value)
                 .Take(maxCount)
-                .Select(MapToListItem)
+                .Select(p => MapToListItem(p, brands))
                 .ToList();
 
             return Ok(onSale);
@@ -164,11 +170,12 @@ public class PublicStoreController : APMEController
         {
 
             var products = await _productRepository.GetListAsync(p => p.IsActive && p.IsPublished);
+            var brands = await _brandRepository.GetListAsync(b => b.IsActive);
 
             var latest = products
                 .OrderByDescending(p => p.CreationTime)
                 .Take(maxCount)
-                .Select(MapToListItem)
+                .Select(p => MapToListItem(p, brands))
                 .ToList();
 
             return Ok(latest);
@@ -190,6 +197,7 @@ public class PublicStoreController : APMEController
 
             var allProducts = await _productRepository.GetListAsync(p => p.IsActive && p.IsPublished);
             var categories = await _categoryRepository.GetListAsync(c => c.IsActive);
+            var brands = await _brandRepository.GetListAsync(b => b.IsActive);
 
             // Apply filters
             var query = allProducts.AsQueryable();
@@ -246,7 +254,7 @@ public class PublicStoreController : APMEController
             var items = query
                 .Skip(input.SkipCount)
                 .Take(input.MaxResultCount)
-                .Select(p => MapToListItemWithCategory(p, categories))
+                .Select(p => MapToListItemWithCategory(p, categories, brands))
                 .ToList();
 
             // Calculate price range for filters
@@ -472,10 +480,11 @@ public class PublicStoreController : APMEController
 
     #region Private Mapping Methods
 
-    private StoreProductListItemDto MapToListItem(Product product)
+    private StoreProductListItemDto MapToListItem(Product product, List<Brand> brands)
     {
         using (_filter.Disable<IMultiTenant>())
         {
+            var brand = brands.FirstOrDefault(b => b.Id == product.BrandId);
 
             return new StoreProductListItemDto
             {
@@ -490,17 +499,18 @@ public class PublicStoreController : APMEController
                 StockQuantity = product.StockQuantity,
                 Rating = 0, // TODO: Implement ratings
                 RatingCount = 0,
-                CategoryId = product.CategoryId
+                CategoryId = product.CategoryId,
+                BrandName = brand?.Name
             };
         }
     }
 
-    private StoreProductListItemDto MapToListItemWithCategory(Product product, List<Category> categories)
+    private StoreProductListItemDto MapToListItemWithCategory(Product product, List<Category> categories, List<Brand> brands)
     {
         using (_filter.Disable<IMultiTenant>())
         {
 
-            var item = MapToListItem(product);
+            var item = MapToListItem(product, brands);
             var category = categories.FirstOrDefault(c => c.Id == product.CategoryId);
             item.CategoryName = category?.Name;
             return item;
@@ -513,7 +523,9 @@ public class PublicStoreController : APMEController
         {
 
             var categories = await _categoryRepository.GetListAsync(c => c.IsActive);
+            var brands = await _brandRepository.GetListAsync(b => b.IsActive);
             var category = categories.FirstOrDefault(c => c.Id == product.CategoryId);
+            var brand = brands.FirstOrDefault(b => b.Id == product.BrandId);
 
             // Get related products from same category
             var relatedProducts = (await _productRepository.GetListAsync(p =>
@@ -521,7 +533,7 @@ public class PublicStoreController : APMEController
                 p.CategoryId == product.CategoryId &&
                 p.Id != product.Id))
                 .Take(4)
-                .Select(MapToListItem)
+                .Select(p => MapToListItem(p, brands))
                 .ToList();
 
             // Build breadcrumbs
@@ -564,6 +576,8 @@ public class PublicStoreController : APMEController
                 Attributes = product.Attributes,
                 Rating = 0, // TODO: Implement ratings
                 RatingCount = 0,
+                BrandId = product.BrandId,
+                BrandName = brand?.Name,
                 CategoryId = product.CategoryId,
                 CategoryName = category?.Name,
                 CategorySlug = category?.Slug,
@@ -601,6 +615,7 @@ public class PublicStoreController : APMEController
 
             var categories = await _categoryRepository.GetListAsync(c => c.IsActive);
             var allProducts = await _productRepository.GetListAsync(p => p.IsActive && p.IsPublished);
+            var brands = await _brandRepository.GetListAsync(b => b.IsActive);
 
             var parent = category.ParentId.HasValue
                 ? categories.FirstOrDefault(c => c.Id == category.ParentId)
@@ -633,7 +648,7 @@ public class PublicStoreController : APMEController
 
             // Get products for this category
             input.CategoryId = category.Id;
-            var productsResult = await GetProductsInternal(input, allProducts, categories);
+            var productsResult = await GetProductsInternal(input, allProducts, categories, brands);
 
             return new StoreCategoryWithProductsDto
             {
@@ -664,9 +679,10 @@ public class PublicStoreController : APMEController
     }
 
     private Task<StoreProductListResultDto> GetProductsInternal(
-        StoreProductSearchInput input, 
-        List<Product> allProducts, 
-        List<Category> categories)
+        StoreProductSearchInput input,
+        List<Product> allProducts,
+        List<Category> categories,
+        List<Brand> brands)
     {
         using (_filter.Disable<IMultiTenant>())
         {
@@ -724,7 +740,7 @@ public class PublicStoreController : APMEController
             var items = query
                 .Skip(input.SkipCount)
                 .Take(input.MaxResultCount)
-                .Select(p => MapToListItemWithCategory(p, categories))
+                .Select(p => MapToListItemWithCategory(p, categories, brands))
                 .ToList();
 
             return Task.FromResult(new StoreProductListResultDto

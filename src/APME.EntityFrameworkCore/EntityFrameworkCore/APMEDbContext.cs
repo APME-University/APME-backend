@@ -565,6 +565,13 @@ public class APMEDbContext :
             // Active flag for soft filtering
             b.Property(x => x.IsActive).IsRequired().HasDefaultValue(true);
 
+            // EmbeddingStatus lifecycle (Phase 3)
+            b.Property(x => x.Status).IsRequired().HasDefaultValue(EmbeddingStatus.NotEmbedded);
+            b.Property(x => x.RetryCount).IsRequired().HasDefaultValue(0);
+            b.Property(x => x.ErrorMessage).HasMaxLength(2000);
+            b.Property(x => x.LastAttemptAt);
+            b.Property(x => x.SearchableTextHash).HasMaxLength(64);
+
             // Indexes
 
             // Unique constraint: one embedding per product per chunk
@@ -594,6 +601,12 @@ public class APMEDbContext :
                 .HasMethod("hnsw")
                 .HasOperators("vector_cosine_ops")
                 .HasDatabaseName("IX_ProductEmbeddings_Embedding_HNSW");
+
+            // Phase 3: Indexes for embedding status queries
+            b.HasIndex(x => new { x.EmbeddingModel, x.Status })
+                .HasDatabaseName("IX_ProductEmbeddings_Model_Status");
+            b.HasIndex(x => x.Status)
+                .HasDatabaseName("IX_ProductEmbeddings_Status");
         });
     }
 

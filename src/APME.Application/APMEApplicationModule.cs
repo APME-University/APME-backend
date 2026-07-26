@@ -1,6 +1,9 @@
 using APME.AI;
 using APME.AI.QueryUnderstanding;
 using APME.Chat;
+using APME.Chatbot;
+using APME.Chatbot.Embeddings;
+using APME.Chatbot.Handlers;
 using APME.Dashboard;
 using APME.Payments;
 using Microsoft.Extensions.DependencyInjection;
@@ -67,7 +70,7 @@ public class APMEApplicationModule : AbpModule
         context.Services.AddTransient<ILlmProvider, OllamaProvider>();
 
         // Register Query Understanding Services - Phase 3 RAG Optimization
-        context.Services.AddTransient<IIntentClassifier, HybridIntentClassifier>();
+        context.Services.AddTransient<AI.QueryUnderstanding.IIntentClassifier, HybridIntentClassifier>();
         context.Services.AddTransient<IEntityRecognizer, HybridEntityRecognizer>();
         context.Services.AddTransient<IQueryExpander, QueryExpander>();
         context.Services.AddTransient<IQueryRewriter, QueryRewriter>();
@@ -79,5 +82,27 @@ public class APMEApplicationModule : AbpModule
 
         // Register Dashboard Service
         context.Services.AddTransient<IDashboardAppService, DashboardAppService>();
+
+        // Register Chatbot Services — Intent Classification Engine
+        context.Services.AddTransient<APME.Chatbot.IIntentClassifier, LlmIntentClassifier>();
+        context.Services.AddTransient<ChatAppService>();
+
+        // Register Hybrid Search Services — Phase 3 Embedding Pipeline + Vector Search
+        context.Services.AddTransient<IHybridSearchService, HybridSearchService>();
+        context.Services.AddTransient<HardFilterStep>();
+        context.Services.AddTransient<ScoreFusionRanker>();
+        context.Services.AddTransient<EmbeddingAdminAppService>();
+
+        // Register Intent Handlers — ABP conventional DI doesn't expose cross-assembly interfaces
+        context.Services.AddTransient<IIntentHandler, FallbackHandler>();
+        context.Services.AddTransient<IIntentHandler, OffTopicHandler>();
+        context.Services.AddTransient<IIntentHandler, ProductSearchHandler>();
+        context.Services.AddTransient<IIntentHandler, ProductComparisonHandler>();
+        context.Services.AddTransient<IIntentHandler, ProductDetailsHandler>();
+        context.Services.AddTransient<IIntentHandler, RecommendationHandler>();
+        context.Services.AddTransient<IIntentHandler, CategoryBrowseHandler>();
+        context.Services.AddTransient<IIntentHandler, OrderStatusHandler>();
+        context.Services.AddTransient<IIntentHandler, PolicyHandler>();
+        context.Services.AddTransient<IIntentHandler, AccountManagementHandler>();
     }
 }

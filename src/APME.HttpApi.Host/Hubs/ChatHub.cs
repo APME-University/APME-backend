@@ -5,9 +5,12 @@ using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using APME.Chat;
+using APME.Chatbot;
+using APME.Chatbot.Dtos;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using Volo.Abp.Domain.Repositories;
 using Volo.Abp.Security.Claims;
 
 namespace APME.HttpApi.Host.Hubs;
@@ -20,16 +23,19 @@ namespace APME.HttpApi.Host.Hubs;
 [Authorize(Policy = "CustomerSignalR")]
 public class ChatHub : Hub
 {
-    private readonly IChatOrchestratorService _orchestrator;
+    private readonly IChatAppService _chatAppService;
+    private readonly IChatSessionRepository _sessionRepo;
     private readonly ChatRateLimiter _rateLimiter;
     private readonly ILogger<ChatHub> _logger;
 
     public ChatHub(
-        IChatOrchestratorService orchestrator,
+        IChatAppService chatAppService,
+        IChatSessionRepository sessionRepo,
         ChatRateLimiter rateLimiter,
         ILogger<ChatHub> logger)
     {
-        _orchestrator = orchestrator;
+        _chatAppService = chatAppService;
+        _sessionRepo = sessionRepo;
         _rateLimiter = rateLimiter;
         _logger = logger;
     }
@@ -107,15 +113,15 @@ public class ChatHub : Hub
             if (!Guid.TryParse(sessionId, out sessionGuid))
             {
                 // Create new session
-                var session = await _orchestrator.GetOrCreateSessionAsync(customerId);
-                await Clients.Caller.SendAsync("SessionCreated", session.Id.ToString());
-                _logger.LogInformation("Created new session {SessionId} for customer {CustomerId}", session.Id, customerId);
+                var newSession = await _sessionRepo.GetOrCreateActiveSessionAsync(customerId);
+                await Clients.Caller.SendAsync("SessionCreated", newSession.Id.ToString());
+                _logger.LogInformation("Created new session {SessionId} for customer {CustomerId}", newSession.Id, customerId);
                 return;
             }
 
             // Validate session belongs to customer
-            var sessionDto = await _orchestrator.GetSessionAsync(sessionGuid, customerId);
-            if (sessionDto == null)
+            var session = await _sessionRepo.GetByCustomerAsync(sessionGuid, customerId);
+            if (session == null)
             {
                 await Clients.Caller.SendAsync("ReceiveError", new ChatErrorDto
                 {
@@ -192,45 +198,43 @@ public class ChatHub : Hub
 
         try
         {
-            // Stream tokens as they arrive
-            var result = await _orchestrator.ProcessMessageAsync(
-                sessionGuid,
-                customerId,
-                message,
-                async token =>
-                {
-                    await Clients.Caller.SendAsync("ReceiveToken", token);
-                },
-                CancellationToken.None);
-
-            // Map context products to DTOs
-            var contextProductDtos = result.ContextProducts?.Select(MapToDto).ToList() ?? new List<ProductSearchResultDto>();
-
-            // Log product details for debugging
-            if (contextProductDtos.Count > 0)
+            // Use the Intent Classification Engine via ChatAppService
+            var result = await _chatAppService.SendMessageAsync(new SendMessageInput
             {
-                _logger.LogDebug(
-                    "Mapping {Count} products. Sample product: Id={ProductId}, Name={Name}, ImageUrl={ImageUrl}",
-                    contextProductDtos.Count,
-                    contextProductDtos.First().ProductId,
-                    contextProductDtos.First().ProductName,
-                    contextProductDtos.First().ImageUrl ?? "null");
-            }
+                SessionId = sessionId,
+                Message = message
+            });
+
+            // Map chatbot products to existing DTOs for client compatibility
+            var contextProductDtos = result.Products.Select(p => new ProductSearchResultDto
+            {
+                ProductId = p.Id,
+                ProductName = p.Name,
+                Price = p.Price,
+                IsInStock = p.InStock,
+                IsOnSale = p.SalePrice.HasValue,
+                CategoryName = p.CategoryName,
+                ImageUrl = p.PrimaryImageUrl,
+                Slug = p.Slug
+            }).ToList();
 
             // Send completion notification
             await Clients.Caller.SendAsync("MessageComplete", new ChatMessageResponseDto
             {
                 SessionId = sessionId,
                 Role = ChatMessageRole.Assistant,
-                Content = result.Response,
+                Content = result.Reply,
                 CreatedAt = DateTime.UtcNow,
-                ContextProducts = contextProductDtos
+                ContextProducts = contextProductDtos,
+                Intent = result.Intent,
+                IntentConfidence = result.Confidence
             });
 
             _logger.LogInformation(
-                "Message processed for session {SessionId}, response length: {Length}, products: {ProductCount}",
+                "Message processed for session {SessionId}, intent: {Intent}, confidence: {Confidence}, products: {ProductCount}",
                 sessionId,
-                result.Response.Length,
+                result.Intent,
+                result.Confidence,
                 contextProductDtos.Count);
         }
         catch (Exception ex)
@@ -283,7 +287,10 @@ public class ChatHub : Hub
         try
         {
             // Archive the session
-            await _orchestrator.ArchiveSessionAsync(sessionGuid, customerId);
+            var session = await _sessionRepo.GetByCustomerAsync(sessionGuid, customerId)
+                ?? throw new InvalidOperationException("Session not found or access denied");
+            session.Archive();
+            await _sessionRepo.UpdateAsync(session);
 
             // Remove connection from SignalR group
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, sessionId);
@@ -340,25 +347,5 @@ public class ChatHub : Hub
         throw new UnauthorizedAccessException("Customer ID not found in claims");
     }
 
-    /// <summary>
-    /// Maps ProductSearchResult to ProductSearchResultDto.
-    /// </summary>
-    private static ProductSearchResultDto MapToDto(APME.AI.ProductSearchResult result)
-    {
-        return new ProductSearchResultDto
-        {
-            ProductId = result.ProductId,
-            ProductName = result.ProductName,
-            Price = result.Price,
-            IsInStock = result.IsInStock,
-            IsOnSale = result.IsOnSale,
-            CategoryName = result.CategoryName,
-            ShopName = result.ShopName,
-            MatchedSnippet = result.MatchedSnippet,
-            RelevanceScore = result.RelevanceScore,
-            ImageUrl = result.ImageUrl,
-            Slug = result.Slug
-        };
-    }
 }
 

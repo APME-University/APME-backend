@@ -79,6 +79,32 @@ public class ProductEmbedding : Entity<Guid>
     /// </summary>
     public bool IsActive { get; private set; } = true;
 
+    /// <summary>
+    /// Lifecycle status of this embedding (NotEmbedded, Queued, Processing, Current, Stale, Failed).
+    /// </summary>
+    public EmbeddingStatus Status { get; set; } = EmbeddingStatus.NotEmbedded;
+
+    /// <summary>
+    /// Number of retry attempts for failed embedding generation.
+    /// </summary>
+    public int RetryCount { get; set; }
+
+    /// <summary>
+    /// Error message from the last failed embedding attempt.
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// Timestamp of the last embedding attempt (success or failure).
+    /// </summary>
+    public DateTime? LastAttemptAt { get; set; }
+
+    /// <summary>
+    /// MD5 hash of Product.SearchableText at the time of embedding.
+    /// Compared on every product save to detect staleness without re-reading the vector.
+    /// </summary>
+    public string? SearchableTextHash { get; set; }
+
     protected ProductEmbedding()
     {
         // Required by EF Core
@@ -129,6 +155,57 @@ public class ProductEmbedding : Entity<Guid>
         CanonicalDocumentVersion = canonicalDocumentVersion;
         PayloadJson = payloadJson;
         GeneratedAt = DateTime.UtcNow;
+        Status = EmbeddingStatus.Current;
+        LastAttemptAt = DateTime.UtcNow;
+        ErrorMessage = null;
+    }
+
+    /// <summary>
+    /// Marks this embedding as processing (job started).
+    /// </summary>
+    public void MarkProcessing()
+    {
+        Status = EmbeddingStatus.Processing;
+        LastAttemptAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Marks this embedding as failed with an error message.
+    /// </summary>
+    public void MarkFailed(string error, int maxRetries = 3)
+    {
+        RetryCount++;
+        ErrorMessage = error;
+        LastAttemptAt = DateTime.UtcNow;
+        Status = RetryCount >= maxRetries
+            ? EmbeddingStatus.Failed
+            : EmbeddingStatus.Queued;
+    }
+
+    /// <summary>
+    /// Marks this embedding as stale (SearchableText changed after embedding was generated).
+    /// </summary>
+    public void MarkStale()
+    {
+        Status = EmbeddingStatus.Stale;
+    }
+
+    /// <summary>
+    /// Marks this embedding as queued for (re-)generation.
+    /// </summary>
+    public void MarkQueued()
+    {
+        Status = EmbeddingStatus.Queued;
+    }
+
+    /// <summary>
+    /// Computes MD5 hash of text for staleness detection.
+    /// </summary>
+    public static string ComputeHash(string text)
+    {
+        var bytes = System.Security.Cryptography.MD5.HashData(
+            System.Text.Encoding.UTF8.GetBytes(text));
+        return Convert.ToHexString(bytes);
     }
 
     /// <summary>

@@ -29,6 +29,16 @@ public static class GenerationRequestAdapter
     {
         var messages = new List<OllamaMessage>();
 
+        // Prepend system prompt if provided
+        if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
+        {
+            messages.Add(new OllamaMessage
+            {
+                Role = OllamaChatRole.System,
+                Content = request.SystemPrompt
+            });
+        }
+
         foreach (var msg in request.Messages)
         {
             var role = msg.Role.ToLowerInvariant() switch
