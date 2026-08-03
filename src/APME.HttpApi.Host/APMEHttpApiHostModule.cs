@@ -42,6 +42,7 @@ using Volo.Abp.BlobStoring.FileSystem;
 using APME.BlobStorage;
 using Hangfire;
 using Hangfire.PostgreSql;
+using APME.PricingAdvisor;
 
 namespace APME;
 
@@ -371,6 +372,10 @@ public class APMEHttpApiHostModule : AbpModule
             // In production, add authorization filter
             // Authorization = new[] { new HangfireAuthorizationFilter() }
         });
+
+        // Pricing advisor: weekly attention detection across all shops/tenants
+        RecurringJob.AddOrUpdate<AttentionDetectionWorker>(
+            "pricing-attention-detection", w => w.RunAllAsync(), Cron.Weekly());
 
         app.UseAuditing();
         app.UseAbpSerilogEnrichers();

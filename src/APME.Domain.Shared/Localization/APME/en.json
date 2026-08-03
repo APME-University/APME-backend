@@ -17,6 +17,12 @@
     "Menu:Addresses": "Addresses",
     "Menu:Payments": "Payments",
     "Menu:TenantCustomers": "Customers",
+    "Menu:PricingAdvisor": "Pricing Advisor",
+    "Menu:PricingAttention": "Attention Center",
+    "Menu:CompetitorPrices": "Competitor Prices",
+    "Menu:PricingHistory": "History",
+    "Menu:PricingGuardrails": "Guardrails",
+    "Menu:Costing": "Costing",
     "Menu:TenantSettings": "Settings",
     
     "Dashboard:ShopAdminTitle": "Shop Admin Dashboard",
@@ -147,6 +153,21 @@
     "Customers:Title": "Customers",
     "Customers:Subtitle": "Manage customers for your shop",
     "Customers:ComingSoon": "Coming Soon",
-    "Customers:ComingSoonDesc": "Customer management feature will be available soon."
+    "Customers:ComingSoonDesc": "Customer management feature will be available soon.",
+
+    "Menu:Costing": "Cost & Margins",
+    "Menu:CostingProducts": "Product Costs",
+    "Menu:CostingSettings": "Shop Settings",
+    "Permission:Costing": "Costing",
+    "Permission:Costing.View": "View costs & margins",
+    "Permission:Costing.ManageCost": "Manage product costs",
+    "Permission:Costing.ManagePolicy": "Manage costing policy",
+    "Costing:Title": "Cost & Margins",
+    "Costing:Subtitle": "Manage product costs, operating rates, and see true margins",
+    "Costing:LandedUnitCost": "Landed unit cost",
+    "Costing:ContributionMargin": "Contribution margin",
+    "Costing:BreakEvenFloor": "Break-even floor",
+    "Costing:RecordReceipt": "Record purchase receipt",
+    "Costing:ImportCsv": "Import costs (CSV)"
   }
 }

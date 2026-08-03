@@ -7,6 +7,8 @@ using APME.Customers;
 using APME.Categories;
 using APME.Products;
 using APME.Dashboard;
+using APME.Costing;
+using APME.PricingAdvisor;
 
 namespace APME;
 
@@ -69,5 +71,17 @@ public class APMEApplicationAutoMapperProfile : Profile
         // AttributeGroup mappings
         CreateMap<AttributeGroup, AttributeGroupDto>();
         CreateMap<CreateUpdateAttributeGroupDto, AttributeGroup>();
+
+        // Costing sub-module mappings
+        CreateMap<CostComponentEntry, CostComponentDto>();
+        CreateMap<CostingPolicy, CostingPolicyDto>();
+
+        // Pricing Advisor mappings
+        CreateMap<PricingRecommendation, RecommendationDto>();
+        CreateMap<PriceCandidate, CandidateDto>();
+        CreateMap<PricingAttentionItem, AttentionItemDto>();
+        CreateMap<PricingAdvisor.PricingPolicy, PricingPolicyDto>();
+        CreateMap<CompetitorPrice, CompetitorPriceDto>();
+        CreateMap<CreateUpdateCompetitorPriceDto, CompetitorPrice>();
     }
 }

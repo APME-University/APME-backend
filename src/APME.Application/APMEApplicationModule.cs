@@ -1,3 +1,5 @@
+using System;
+using Microsoft.Extensions.Configuration;
 using APME.AI;
 using APME.AI.QueryUnderstanding;
 using APME.Chat;
@@ -82,6 +84,27 @@ public class APMEApplicationModule : AbpModule
 
         // Register Dashboard Service
         context.Services.AddTransient<IDashboardAppService, DashboardAppService>();
+
+        // Pricing Advisor demand oracle — select the stub (default) or the FastAPI GRU client.
+        // Registered explicitly here (StubDemandClient carries no auto-DI marker) so exactly one
+        // IPricingAdvisorClient is ever bound.
+        context.Services.Configure<PricingAdvisor.PricingAdvisorOptions>(
+            configuration.GetSection(PricingAdvisor.PricingAdvisorOptions.SectionName));
+        var advisorOptions = configuration
+            .GetSection(PricingAdvisor.PricingAdvisorOptions.SectionName)
+            .Get<PricingAdvisor.PricingAdvisorOptions>() ?? new PricingAdvisor.PricingAdvisorOptions();
+        if (advisorOptions.UseStub)
+        {
+            context.Services.AddTransient<PricingAdvisor.IPricingAdvisorClient, PricingAdvisor.StubDemandClient>();
+        }
+        else
+        {
+            context.Services.AddHttpClient<PricingAdvisor.IPricingAdvisorClient, PricingAdvisor.HttpPricingAdvisorClient>(client =>
+            {
+                client.BaseAddress = new Uri(advisorOptions.BaseUrl);
+                client.Timeout = TimeSpan.FromSeconds(advisorOptions.TimeoutSeconds);
+            });
+        }
 
         // Register Chatbot Services — Intent Classification Engine
         context.Services.AddTransient<APME.Chatbot.IIntentClassifier, LlmIntentClassifier>();

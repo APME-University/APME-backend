@@ -22,6 +22,8 @@ using APME.Products;
 using APME.Carts;
 using APME.Orders;
 using APME.Chat;
+using APME.Costing;
+using APME.PricingAdvisor;
 
 namespace APME.EntityFrameworkCore;
 
@@ -70,6 +72,20 @@ public class APMEDbContext :
     public DbSet<ChatMessage> ChatMessages { get; set; }
     public DbSet<IntentClassificationLog> IntentClassificationLogs { get; set; }
     public DbSet<ConversationContext> ConversationContexts { get; set; }
+
+    // Costing sub-module
+    public DbSet<ProductCostProfile> ProductCostProfiles { get; set; }
+    public DbSet<CostComponentEntry> CostComponentEntries { get; set; }
+    public DbSet<CostingPolicy> CostingPolicies { get; set; }
+
+    // Pricing Advisor
+    public DbSet<PricingRecommendation> PricingRecommendations { get; set; }
+    public DbSet<PriceCandidate> PriceCandidates { get; set; }
+    public DbSet<PricingAdvisor.PricingPolicy> AdvisorPricingPolicies { get; set; }
+    public DbSet<CompetitorPrice> CompetitorPrices { get; set; }
+    public DbSet<PriceChangeLog> PriceChangeLogs { get; set; }
+    public DbSet<PricingAttentionItem> PricingAttentionItems { get; set; }
+    public DbSet<RecommendationOutcome> RecommendationOutcomes { get; set; }
 
     #region Entities from the modules
 
@@ -148,6 +164,8 @@ public class APMEDbContext :
         ConfigureSearchQueryLogs(builder);
         ConfigureChat(builder);
         ConfigureConversationContexts(builder);
+        ConfigureCosting(builder);
+        ConfigurePricingAdvisor(builder);
     }
 
     private void ConfigureShops(ModelBuilder builder)
@@ -166,6 +184,174 @@ public class APMEDbContext :
             b.HasIndex(x => x.TenantId);
             b.HasIndex(x => x.Slug);
             b.HasIndex(x => new { x.TenantId, x.Slug }).IsUnique();
+        });
+    }
+
+    private void ConfigureCosting(ModelBuilder builder)
+    {
+        builder.Entity<ProductCostProfile>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "ProductCostProfiles", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+            b.Ignore(x => x.HasCost);
+
+            b.Property(x => x.Currency).IsRequired().HasMaxLength(3).HasDefaultValue("USD");
+            b.Property(x => x.CurrentLandedUnitCost).HasColumnType("decimal(18,4)");
+
+            b.HasOne<Product>().WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Shop>().WithMany().HasForeignKey(x => x.ShopId).OnDelete(DeleteBehavior.Restrict);
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => x.ShopId);
+            b.HasIndex(x => new { x.TenantId, x.ProductId }).IsUnique();
+        });
+
+        builder.Entity<CostComponentEntry>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "CostComponentEntries", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.Currency).IsRequired().HasMaxLength(3).HasDefaultValue("USD");
+            b.Property(x => x.Amount).HasColumnType("decimal(18,4)");
+            b.Property(x => x.Reference).HasMaxLength(128);
+            b.Property(x => x.Note).HasMaxLength(512);
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => x.ProductId);
+            b.HasIndex(x => new { x.ProductId, x.Plane, x.ValueType });
+        });
+
+        builder.Entity<CostingPolicy>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "CostingPolicies", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+            b.Ignore(x => x.PerUnitOperatingCost);
+            b.Ignore(x => x.FeePct);
+
+            b.Property(x => x.Currency).IsRequired().HasMaxLength(3).HasDefaultValue("USD");
+            b.Property(x => x.MarketplaceFeePct).HasColumnType("decimal(9,4)");
+            b.Property(x => x.PaymentFeePct).HasColumnType("decimal(9,4)");
+            b.Property(x => x.PaymentFixedPerUnit).HasColumnType("decimal(18,4)");
+            b.Property(x => x.FulfillmentPerUnit).HasColumnType("decimal(18,4)");
+            b.Property(x => x.StoragePerUnitMonth).HasColumnType("decimal(18,4)");
+            b.Property(x => x.ReturnsReservePct).HasColumnType("decimal(9,4)");
+            b.Property(x => x.AdPerUnit).HasColumnType("decimal(18,4)");
+
+            b.HasOne<Shop>().WithMany().HasForeignKey(x => x.ShopId).OnDelete(DeleteBehavior.Restrict);
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => new { x.TenantId, x.ShopId }).IsUnique();
+        });
+    }
+
+    private void ConfigurePricingAdvisor(ModelBuilder builder)
+    {
+        builder.Entity<PricingRecommendation>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "PricingRecommendations", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.CurrentPrice).HasColumnType("decimal(18,2)");
+            b.Property(x => x.RecommendedPrice).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ExpectedDemand).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ExpectedRevenue).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ExpectedProfit).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ExpectedMargin).HasColumnType("decimal(9,4)");
+            b.Property(x => x.ReasonCodes).HasColumnType("jsonb");
+            b.Property(x => x.Explanation).HasMaxLength(2000);
+            b.Property(x => x.DecisionNote).HasMaxLength(1000);
+
+            b.HasMany(x => x.Candidates).WithOne().HasForeignKey(c => c.RecommendationId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Product>().WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Shop>().WithMany().HasForeignKey(x => x.ShopId).OnDelete(DeleteBehavior.Restrict);
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => new { x.ShopId, x.ProductId });
+            b.HasIndex(x => x.Status);
+        });
+
+        builder.Entity<PriceCandidate>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "PriceCandidates", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.Price).HasColumnType("decimal(18,2)");
+            b.Property(x => x.PctChange).HasColumnType("decimal(9,4)");
+            b.Property(x => x.PredictedDemand).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ExpectedRevenue).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ExpectedProfit).HasColumnType("decimal(18,2)");
+            b.Property(x => x.Margin).HasColumnType("decimal(9,4)");
+            b.Property(x => x.GuardrailsJson).HasColumnType("jsonb");
+
+            b.HasIndex(x => x.RecommendationId);
+        });
+
+        builder.Entity<PricingAdvisor.PricingPolicy>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "PricingPolicies", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.MinMarginPct).HasColumnType("decimal(9,4)");
+            b.Property(x => x.MaxDiscountPct).HasColumnType("decimal(9,4)");
+            b.Property(x => x.MaxIncreasePct).HasColumnType("decimal(9,4)");
+            b.Property(x => x.CandidateGridJson).HasColumnType("jsonb");
+
+            b.HasOne<Shop>().WithMany().HasForeignKey(x => x.ShopId).OnDelete(DeleteBehavior.Restrict);
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => new { x.TenantId, x.ShopId }).IsUnique();
+        });
+
+        builder.Entity<CompetitorPrice>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "CompetitorPrices", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.Competitor).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Price).HasColumnType("decimal(18,2)");
+            b.Property(x => x.Currency).IsRequired().HasMaxLength(3).HasDefaultValue("USD");
+            b.Property(x => x.Url).HasMaxLength(1024);
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => new { x.ShopId, x.ProductId });
+        });
+
+        builder.Entity<PriceChangeLog>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "PriceChangeLogs", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.OldPrice).HasColumnType("decimal(18,2)");
+            b.Property(x => x.NewPrice).HasColumnType("decimal(18,2)");
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => new { x.ShopId, x.ProductId });
+        });
+
+        builder.Entity<PricingAttentionItem>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "PricingAttentionItems", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.EstimatedOpportunity).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ReasonSummary).HasMaxLength(1000);
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => new { x.ShopId, x.ProductId });
+            b.HasIndex(x => new { x.ShopId, x.IsResolved, x.Priority });
+        });
+
+        builder.Entity<RecommendationOutcome>(b =>
+        {
+            b.ToTable(APMEConsts.DbTablePrefix + "RecommendationOutcomes", APMEConsts.DbSchema);
+            b.ConfigureByConvention();
+
+            b.Property(x => x.ActualUnits).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ActualRevenue).HasColumnType("decimal(18,2)");
+            b.Property(x => x.ActualProfit).HasColumnType("decimal(18,2)");
+
+            b.HasIndex(x => x.TenantId);
+            b.HasIndex(x => x.RecommendationId);
         });
     }
 
